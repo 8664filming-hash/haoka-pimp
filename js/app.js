@@ -1,6 +1,6 @@
 // 好咖皮條客主程式：狀態、畫面、事件。只透過 adapter.js 取得與寫入資料。版面規格見交接包 DESIGN.md。
-import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey } from './adapter.js';
-import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js';
+import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl } from './adapter.js?v2';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
+import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v2';
 
 const $ = s => document.querySelector(s);
 const LANES = [
@@ -15,15 +15,16 @@ const INBOX_LANES = ['tender', 'grant', 'pitch', 'watch'];
 const FALLBACK_LANE = 'pitch';     // 後端沒給 lane 的卡先放企劃提案（見回報「已知問題」）
 const HOLD_HOUR = 8;               // 暫存後隔天幾點提醒（後端 opp_stash 同規則）
 
-// ===== 待定文案（集中在這裡，定案後只改這一處）=====
-// 提醒由誰傳訊息、資料夾出事找誰、新案子由誰放進來，都還沒決定，先寫中性說法。
+// ===== 文案集中在這裡 =====
+// 提醒：2026-11-16 定案，暫存與追蹤提醒由肉咖在 LINE 公司群組發。
+// 其餘（資料夾出事找誰、新案子由誰放進來、全文由誰整理）還沒決定，先寫中性說法，定案後只改這一處。
 export const TBD = {
-  stashToast: name => '「' + name + '」放進待決區，到期前會提醒你',
-  remindLine: at => '提醒時間：' + fmtDate(at),
+  stashToast: name => '「' + name + '」放進待決區，到期前肉咖會在 LINE 群組提醒',
+  remindLine: at => '提醒時間：' + fmtDate(at) + '，肉咖會在 LINE 群組提醒',
   remindPassed: '已到提醒時間，請決定要不要做',
-  previewRemind: at => '暫存中，到期前會提醒你（' + fmtDate(at) + '）',
-  sheetEmpty: '按「暫存」的案子會放在這裡，到期前會提醒你。',
-  sheetNote: '到期前會提醒你；網頁自己不會跳通知。',
+  previewRemind: at => '暫存中，到期前肉咖會在 LINE 群組提醒（' + fmtDate(at) + '）',
+  sheetEmpty: '按「暫存」的案子會放在這裡，到期前肉咖會在 LINE 群組提醒。',
+  sheetNote: '到期前肉咖會在 LINE 群組提醒；網頁自己不會跳通知。',
   laneEmpty: '有新的案子會自動出現在這裡，不用重新整理。',
   boardEmpty: '有新的案子會自動出現在這裡，不用重新整理。',
   folderFailHelp: '請找管理員處理。這張卡已經記成「要做」，不會不見。',
@@ -34,6 +35,28 @@ export const TBD = {
 const AUTH_MSG = '金鑰失效，請向管理員重新索取網址';
 const TENDER_ADMIN = '政府標案由管理員決定要不要做';   // sql/21：lane = tender 的 opp_build 只給 admin
 const OUTCOME = { submitted: '已送件', won: '得標或核定', lost: '未得標', withdrawn: '撤件放棄' };
+// ----- 步驟備註裡的網址 → 按鈕（只收 http(s)，經過 adapter 的 safeUrl） -----
+const PAY_STEP = 'pay_approval';   // 等待付款同意（領標付款）
+const URL_RE = /https?:\/\/[^\s<>"'，。、；！？）」』】]+/i;
+const noteUrl = note => { const m = String(note || '').match(URL_RE); return m ? safeUrl(m[0].replace(/[.,;:!?)\]]+$/, '')) : ''; };
+const noteText = note => String(note || '').replace(URL_RE, '').replace(/[：:\s]+$/, '').trim();   // 網址畫成按鈕後，備註只留文字
+const isClaude = u => { try { const h = new URL(u).hostname; return h === 'claude.ai' || h.endsWith('.claude.ai'); } catch (e) { return false; } };
+const linkLabel = (key, u) => key === PAY_STEP ? '去領標付款' : isClaude(u) ? '進領標對話' : '開啟連結';
+const linkBtn = (key, u, cls) => '<a class="btn ' + (cls || 'btn-ghost') + ' step-link" href="' + esc(u) + '" target="_blank" rel="noopener noreferrer">' + linkLabel(key, u) + '</a>';
+// ----- 正式連結 links（sql/23）-----
+const LINK_DEFAULT = { pool: 'Pool 官方文件與成品', review: '標案內審', pay: '去領標付款', session: '進領標對話', other: '開啟連結' };
+const linkText = l => l.label || LINK_DEFAULT[l.kind] || '開啟連結';
+const linksOf = it => Array.isArray(it.links) ? it.links : [];
+const linkOf = (it, kind) => linksOf(it).find(l => l.kind === kind);
+const extLink = (l, cls, text) => '<a class="' + cls + '" href="' + esc(l.url) + '" target="_blank" rel="noopener noreferrer">' + esc(text || linkText(l)) + '</a>';
+// 卡片上的「去領標付款」：先看 links 的 pay；沒有才用備援——目前那一步是 pay_approval，網址取該步備註（步驟清單有抓過時），再不然看整張卡的 progress_note
+function payUrl(it) {
+  if (it.status !== 'doing') return '';
+  const pay = linkOf(it, 'pay'); if (pay) return pay.url;
+  if (it.progressStageKey !== PAY_STEP) return '';
+  const st = it.progressSteps && it.progressSteps.find(x => x.key === PAY_STEP);
+  return noteUrl(st && st.note) || noteUrl(it.progressNote);
+}
 
 const IC = {
   trash: '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>',
@@ -260,7 +283,14 @@ function acard(it) {
     '<p class="stage"><b>' + esc(it.progressStage || '建立工作區') + '</b><span class="pst ' + p.cls + '">' + p.badge + '</span></p>' +
     cardOrg(it) + '<h3 class="sb">' + softBreak(it.title) + '</h3>' +
     '<div class="prog-row"><div class="pbar" aria-hidden="true"><i style="width:' + pct(it) + '%"></i></div><span class="frac">' + fracText(it) + '</span></div>' +
-    meta + '<div class="ca"><button class="go go-wide" data-act="open-progress" data-id="' + id + '" type="button" aria-label="看「' + esc(nm(it)) + '」的進度">看進度</button></div></article>';
+    meta + '<div class="ca">' + (payUrl(it) ? '<a class="go go-wide pay-link" href="' + esc(payUrl(it)) + '" target="_blank" rel="noopener noreferrer" aria-label="「' + esc(nm(it)) + '」去領標付款">去領標付款</a>' : '') +
+    '<button class="go go-wide' + (payUrl(it) ? ' alt' : '') + '" data-act="open-progress" data-id="' + id + '" type="button" aria-label="看「' + esc(nm(it)) + '」的進度">看進度</button></div>' +
+    cardLinks(it) + '</article>';
+}
+// 進行中卡片下方：Pool、內審兩顆小連結（手機上一點就開該案的 Drive 資料夾）
+function cardLinks(it) {
+  const ls = ['pool', 'review'].map(k => linkOf(it, k)).filter(Boolean);
+  return ls.length ? '<div class="card-links">' + ls.map(l => extLink(l, 'mini-link')).join('') + '</div>' : '';
 }
 const skel = () => '<div class="card skel"><div class="sk"></div><div class="sk"></div><div class="sk"></div></div>';
 
@@ -440,17 +470,20 @@ function fullHTML(it) {
 }
 
 // ----- 進度大區塊（進行中的進度抽屜；網頁端只讀，沒有任何寫入進度的按鈕） -----
-function stepRow(s, i) {
+function stepRow(s, i, all, it) {
   const mark = s.status === 'done' ? '✓' : s.status === 'skipped' ? '–' : s.status === 'blocked' ? '!' : String(i + 1);
   let sub = '';
   if (s.status === 'done') sub = s.doneAt ? relTime(s.doneAt, tnow()) : '完成';
   else if (s.status === 'skipped') sub = '略過';
   else if (s.status === 'current') sub = '進行中' + (s.owner ? ' · ' + esc(s.owner) + ' 負責' : '') + (s.dueAt ? '<br><span class="' + (s.dueAt < tnow() ? 'due-late' : '') + '">這步要在 ' + fmtDate(s.dueAt) + ' 前完成' + (s.dueAt < tnow() ? '（已逾期）' : '') + '</span>' : '');
-  else if (s.status === 'blocked') sub = '卡住' + (s.note ? '：' + esc(s.note) : '') + (s.owner ? ' · ' + esc(s.owner) : '');
+  const raw = noteUrl(s.note), txt = raw ? noteText(s.note) : s.note;   // 備註有網址：文字照樣跳脫，網址另外畫成按鈕
+  const u = raw && !(it && linksOf(it).some(l => l.url === raw)) ? raw : '';   // 同一個網址已在 links（檔案區）就不重複畫
+  if (s.status === 'blocked') sub = '卡住' + (txt ? '：' + esc(txt) : '') + (s.owner ? ' · ' + esc(s.owner) : '');
   const big = s.status === 'current' || s.status === 'blocked';
-  return '<li class="step ' + s.status + '"><span class="dot-s" aria-hidden="true">' + mark + '</span>' +
-    (big ? '<div><p class="nm">' + esc(s.name) + '</p><p class="sub">' + sub + '</p>' + (s.note && s.status === 'current' ? '<p class="sub">' + esc(s.note) + '</p>' : '') + '</div>'
-         : '<p class="nm">' + esc(s.name) + '</p>' + (sub ? '<p class="sub">' + sub + '</p>' : '')) + '</li>';
+  const btn = u ? '<div class="step-acts">' + linkBtn(s.key, u, s.key === PAY_STEP && big ? 'btn-primary' : 'btn-ghost') + '</div>' : '';
+  return '<li class="step ' + s.status + (u ? ' has-link' : '') + '"><span class="dot-s" aria-hidden="true">' + mark + '</span>' +
+    (big ? '<div><p class="nm">' + esc(s.name) + '</p><p class="sub">' + sub + '</p>' + (txt && s.status === 'current' ? '<p class="sub">' + esc(txt) + '</p>' : '') + btn + '</div>'
+         : '<p class="nm">' + esc(s.name) + '</p>' + (sub ? '<p class="sub">' + sub + '</p>' : '') + btn) + '</li>';
 }
 function folderRow(it) {
   const fs = it.folderStatus;
@@ -462,9 +495,14 @@ function folderRow(it) {
   if (!real) return '<div class="fold-row"><p class="prog-upd">這張是示意卡，不會真的建資料夾。</p>' + (p || it.folderName ? '<div class="path">' + esc(it.folderName || p) + '</div>' : '') + notion + '</div>';
   return '<div class="fold-row"><p class="prog-upd">工作資料夾已建立' + (it.isDemo ? '（示意路徑）' : '') + '</p><div class="path">' + esc(p) + '</div>' + notion + '</div>';
 }
+// 「檔案」區：links 每項一顆按鈕（文字用 label，沒有就用預設），pay 用主色
+function filesRow(it) {
+  const ls = linksOf(it); if (!ls.length) return '';
+  return '<div class="fold-row files"><p class="prog-upd">檔案</p><div class="fold-acts">' + ls.map(l => extLink(l, 'btn ' + (l.kind === 'pay' ? 'btn-primary' : 'btn-ghost') + ' file-link')).join('') + '</div></div>';
+}
 function progressBox(it) {
   const p = pv(it), st = it.progressSteps, busy = S.prog.get(it.id) && S.prog.get(it.id).busy;
-  const steps = st && st.length ? '<ol class="steps">' + st.map(stepRow).join('') + '</ol>'
+  const steps = st && st.length ? '<ol class="steps">' + st.map((x, i, a) => stepRow(x, i, a, it)).join('') + '</ol>'
     : st ? '<p class="prog-upd">還沒有步驟清單。</p>'
     : '<div class="crawl-sk" aria-hidden="true"><i class="sk"></i><i class="sk"></i><i class="sk"></i></div>' + (busy ? '' : '');
   let warnLine = '';
@@ -480,7 +518,7 @@ function progressBox(it) {
     '<div class="pbar big" aria-hidden="true"><i style="width:' + pct(it) + '%"></i></div>' + warnLine +
     (it.progressNote ? '<p class="prog-note sbp">' + softBreak(it.progressNote) + '</p>' : '') +
     (it.progressUpdatedAt ? '<p class="prog-upd">最後更新：' + fmtDate(it.progressUpdatedAt) + '，由 ' + esc(it.progressUpdatedBy || '不明') + ' 更新</p>' : '') +
-    steps + folderRow(it) + '</section>';
+    steps + folderRow(it) + filesRow(it) + '</section>';
 }
 function progressHTML(it) {
   const p = pv(it), t = target(it);
@@ -707,6 +745,7 @@ async function ensureProgress(id, force) {
     if (e instanceof AdapterError && e.kind === 'auth') { setAuth(); renderAll(); }
   }
   redrawDrawer(id);
+  if (get(id) && get(id).progressStageKey === PAY_STEP) renderBoard();
 }
 
 // ---------------- 讀取：快照、逾時、輪詢、即時 ----------------
@@ -726,7 +765,7 @@ function saveSnapshot() {
 }
 const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new AdapterError('timeout', '連線逾時')), ms))]);
 const sig = () => JSON.stringify(items().map(i => [i.id, i.status, i.lane, i.snoozeUntil, i.deadline, i.expiresAt, i.title, i.folderStatus, i.folderPath, i.folderError, i.notionUrl, i.crawlStatus, i.crawlError, i.detailText.length, i.amountDisplay, i.why,
-  i.progressStatus, i.progressStage, i.progressPct, i.progressStepN, i.progressNote, i.progressBlocker, i.progressUpdatedAt, i.progressArchiveAt, i.progressSteps ? i.progressSteps.length : -1]));
+  i.progressStatus, i.progressStage, i.progressPct, i.progressStepN, i.progressNote, i.progressBlocker, i.progressUpdatedAt, i.progressArchiveAt, i.progressSteps ? i.progressSteps.length : -1, JSON.stringify(i.links || [])]));
 
 let inflight = false, again = false, pollT, pingT, unsub = () => {};
 // 金鑰失效：停輪詢、停 realtime、刪這把金鑰的快照（D 審稿 #6、#7）
@@ -760,6 +799,8 @@ async function refresh() {
     if (dr && viewOf() === 'full' && dr.crawlStatus === 'done' && !dr.detailText) ensureDetail(dr.id);
     // 正開著進度抽屜，而進度有更新（progress_updated_at 變了）：重抓步驟清單
     if (dr && viewOf() === 'progress') ensureProgress(dr.id);
+    // 停在「等待付款同意」又沒有 pay 連結的卡（備援）：opp_list 不帶步驟備註，背景補抓一次，卡片上才畫得出「去領標付款」
+    items().filter(i => laneOf(i) === 'active' && i.progressStageKey === PAY_STEP && !linkOf(i, 'pay')).forEach(i => ensureProgress(i.id));
   } catch (e) {
     if (e instanceof AdapterError && e.kind === 'auth') setAuth(); else S.net = 'offline';
   } finally {
@@ -850,6 +891,34 @@ window.addEventListener('popstate', () => {
   if (ignorePop) { ignorePop = false; return; }
   if (S.drawer || S.sheet) { depth = 0; S.drawer = null; S.sheet = false; $('#drawer').classList.remove('show'); $('#sheet').classList.remove('show'); syncOverlay(); renderAll(); }
 });
+// ---------------- 手機左右滑動切換籃子（959 以下；960 以上五欄同時顯示，不啟用） ----------------
+// 規則：水平位移 > 60px 而且明顯大於垂直位移才算；抽屜、待決區、toast 開著不觸發；從螢幕左緣 24px 內開始的讓給 iOS 返回手勢。
+const SW = { mq: matchMedia('(max-width: 959px)'), rm: matchMedia('(prefers-reduced-motion: reduce)'), on: false, x: 0, y: 0 };
+const overlayOpen = () => !!S.drawer || S.sheet || $('#toast').classList.contains('show');
+function switchTab(k, dir) {
+  if (k === S.tab) return;
+  S.tab = k; renderBoard();
+  const lane = $('.lane.cur');
+  if (!lane || SW.rm.matches) return;
+  lane.classList.add(dir === 'l' ? 'swipe-l' : 'swipe-r');
+  lane.addEventListener('animationend', () => lane.classList.remove('swipe-l', 'swipe-r'), { once: true });
+}
+$('#board').addEventListener('touchstart', e => {
+  SW.on = false;
+  if (!SW.mq.matches || e.touches.length !== 1 || overlayOpen() || S.net === 'auth') return;
+  const t = e.touches[0];
+  if (t.clientX <= 24) return;                 // 讓給 iOS 的返回手勢
+  SW.on = true; SW.x = t.clientX; SW.y = t.clientY;
+}, { passive: true });
+$('#board').addEventListener('touchend', e => {
+  if (!SW.on) return; SW.on = false;
+  const t = e.changedTouches[0], dx = t.clientX - SW.x, dy = t.clientY - SW.y;
+  if (Math.abs(dx) <= 60 || Math.abs(dx) < Math.abs(dy) * 1.5 || overlayOpen() || !SW.mq.matches) return;
+  const i = LANES.findIndex(l => l.k === S.tab), j = i + (dx < 0 ? 1 : -1);   // 往左滑看下一籃，往右滑看上一籃
+  if (i < 0 || j < 0 || j >= LANES.length) return;
+  switchTab(LANES[j].k, dx < 0 ? 'l' : 'r');
+}, { passive: true });
+$('#board').addEventListener('touchcancel', () => { SW.on = false; }, { passive: true });
 $('#lanes').addEventListener('scroll', edgeFade, { passive: true });
 window.addEventListener('resize', edgeFade);
 window.addEventListener('online', () => refresh());

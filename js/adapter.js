@@ -72,7 +72,7 @@ export async function createAdapter() {
   const configured = CONFIG.SUPABASE_URL.startsWith('http') && !CONFIG.SUPABASE_URL.includes('YOUR-PROJECT-REF') && !CONFIG.SUPABASE_ANON_KEY.startsWith('YOUR-');
   if (!configured) console.info('[好咖皮條客] adapter.js 的 SUPABASE_URL / SUPABASE_ANON_KEY 還是待填佔位，目前顯示示範資料');
   if (hasKey() && !forceMock && configured) return liveAdapter();
-  const { mockAdapter } = await import('./mock.js');
+  const { mockAdapter } = await import('./mock.js?v2');   // ?v 跟 sw.js 的 CACHE 一起換
   return mockAdapter(forceMock ? mockFlag : '');
 }
 
@@ -83,6 +83,12 @@ const arr = v => Array.isArray(v) ? v.map(x => String(x)).filter(Boolean) : (typ
 const str = v => (v == null ? '' : String(v));
 // 網址只收 http(s)，其他（javascript:、data: 等）一律當成沒有網址，不畫成連結
 export const safeUrl = v => { const u = str(v).trim(); return /^https?:\/\//i.test(u) ? u : ''; };
+// 正式連結欄位 links（sql/23）：[{kind, label, url}]，kind = pool｜review｜pay｜session｜other；只收 https://
+export const LINK_KINDS = ['pool', 'review', 'pay', 'session', 'other'];
+function links(v) {
+  if (!Array.isArray(v)) return [];
+  return v.filter(x => x && typeof x === 'object').map(x => ({ kind: LINK_KINDS.includes(x.kind) ? x.kind : 'other', label: str(x.label).trim(), url: /^https:\/\//i.test(str(x.url).trim()) ? str(x.url).trim() : '' })).filter(x => x.url);
+}
 const int = v => { const n = Number(v); return Number.isFinite(n) ? Math.round(n) : null; };
 const STEP_ST = ['pending', 'current', 'done', 'skipped', 'blocked'];
 const PROG_ST = ['none', 'queued', 'active', 'blocked', 'overdue', 'done', 'failed'];
@@ -112,6 +118,7 @@ export function normalize(r) {
     detailText: str(r.full_text), attachments: Array.isArray(r.attachments) ? r.attachments.filter(a => a && safeUrl(a.url)).map(a => ({ name: str(a.name), url: safeUrl(a.url), type: str(a.type) })) : [],
     folderStatus: str(r.folder_status) || 'none', folderError: str(r.folder_error), folderName: str(r.folder_name), folderPath: str(r.folder_path),
     notionUrl: safeUrl(r.notion_url), notionStatus: str(r.notion_status),
+    links: links(r.links),   // 沒有就是空陣列
     dropReason: str(r.drop_reason),
     // 進度摘要（opp_list 每張 doing 卡都有）。progress_status 由後端 _opp_card 現算，前端照用。
     progressStatus: PROG_ST.includes(r.progress_status) ? r.progress_status : (status === 'doing' ? 'active' : 'none'),

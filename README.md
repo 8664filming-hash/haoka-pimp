@@ -13,7 +13,7 @@
 - `js/mock.js`：示範資料與假動作，以及偵錯用的 `?mock=` 參數（`viewer`、`slow`、`crawlslow`、`crawlhang`、`crawlfail`、`realbuild`、`setfail` 等，說明在檔頭）。
 - `js/app.js`：狀態、畫面、事件。待定文案集中在檔頭的 `TBD` 常數。
 - `js/util.js`：時間（台北時區）、相對時間、倒數、中文斷行、金額。
-- `sw.js`：只快取同網域畫面檔，網路優先，API 請求不經過它。**每次改版把 `CACHE` 名稱換掉**（目前 `opp-co-shell-v1`）。
+- `sw.js`：只快取同網域畫面檔，網路優先，API 請求不經過它。**每次改版要一起換三處**：`sw.js` 的 `CACHE`（目前 `opp-co-shell-v2`）與 `V`、`index.html` 和各 js `import` 網址後面的 `?v2`（app.js 兩處、mock.js 一處、adapter.js 的 mock 動態匯入一處）。GitHub Pages 會讓瀏覽器快取檔案約 10 分鐘，不帶版本號會拿到新舊混搭的 js。
 - `manifest.webmanifest`、`icons/`：加到主畫面用（短名「皮條客」，刻意不寫 start_url 與 scope）。
 
 ## 金鑰與權限

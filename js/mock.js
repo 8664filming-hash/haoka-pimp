@@ -23,7 +23,7 @@
 //   realbuild    要做之後照真卡流程：排隊 → 建立中 → 建好（看 3 秒快輪詢與第 1 步自動完成）
 //   folderslow   同 realbuild，但 12 秒後才建好
 //   live         9 秒後進來一張新卡（看新進光暈與 toast）
-import { AdapterError, normalize } from './adapter.js';
+import { AdapterError, normalize } from './adapter.js?v2';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
 
 const H = 3600e3, D = 24 * H, MIN = 60e3;
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -84,7 +84,7 @@ function build() {
     crawl_status: 'none', crawl_error: null, full_text: '', attachments: [],
     folder_status: 'none', folder_name: null, folder_path: null, folder_error: null, notion_status: null, notion_url: null,
     progress_state: null, progress_steps: [], progress_note: null, progress_blocker: null, progress_outcome: null, progress_archive_at: null,
-    progress_updated_at: null, progress_updated_by: null,
+    progress_updated_at: null, progress_updated_by: null, links: [],
   };
   const row = o => Object.assign({}, base, o);
   const doing = (o, lane, n, so) => {
@@ -126,6 +126,7 @@ function build() {
       case_no: '1150807（示意）', tender_method: '公開招標', bid_bond: '不用', performance_period: '決標後 90 天', qualification: '公司登記，營業項目含廣告與影片製作。',
       source_site: '政府電子採購網', source_url: SRC + 'active-1', folder_name: '11-14_地方創生紀錄短片', folder_path: '/Users/Shared/公司工作區/11-14_地方創生紀錄短片',
       notion_status: 'done', notion_url: SRC + 'notion-page', progress_state: 'active', progress_note: '初稿結構已出，等你看第二段節奏。',
+      links: [{ kind: 'pool', label: 'Pool 官方文件與成品', url: 'https://drive.google.com/drive/folders/DEMO-POOL-A1' }, { kind: 'review', label: '標案內審', url: 'https://drive.google.com/drive/folders/DEMO-REVIEW-A1' }, { kind: 'other', label: '示意：不是 https 的連結不會出現', url: 'http://example.org/insecure' }],
       progress_updated_at: iso(now - 22 * MIN), progress_updated_by: 'Company Claude' }, 'tender', 4, { owner: 'Company Claude' }),
     // 卡住
     doing({ id: 'demo-a2', title: '產業故事影音案', org: '臺北市產業發展局', amount_label: '預算', amount_display: '98萬', deadline: at(3, 12), created_at: ago(120),
@@ -162,6 +163,23 @@ function build() {
     row({ id: 'demo-x2', lane: 'grant', status: 'expired', title: '短片輔導金（上半年）', org: '某市影視發展基金會', amount_label: '補助上限', amount_display: '50萬',
       deadline: iso(now - 20 * H), created_at: ago(9 * 24), decided_at: ago(20) }),
   ];
+  // 停在「等待付款同意」（pay_approval）：步驟備註帶採購網網址 → 畫成「去領標付款」；也示範 claude.ai 網址（進領標對話）與一般網址（開啟連結）
+  const pay = doing({ id: 'demo-a9', title: '觀光導覽影片製作', org: '某縣政府觀光處', amount_label: '預算', amount_display: '88萬', deadline: at(9, 17), created_at: ago(30),
+    tender_method: '公開招標', source_url: SRC + 'active-9', source_site: '政府電子採購網', folder_name: '11-15_觀光導覽影片製作', folder_path: '/Users/Shared/公司工作區/11-15_觀光導覽影片製作',
+    progress_state: 'active', progress_note: '領標要先付款，等管理員同意。', progress_updated_at: iso(now - 8 * MIN), progress_updated_by: 'Company Claude',
+    links: [
+      { kind: 'pay', label: '去領標付款', url: 'https://web.pcc.gov.tw/tps/QueryTender/query/searchTenderDetail?pkPmsMain=DEMO' },   // 與步驟備註同一個網址：步驟那顆不重複畫
+      { kind: 'pool', label: '', url: 'https://drive.google.com/drive/folders/DEMO-POOL-A9' },
+      { kind: 'review', label: '', url: 'https://drive.google.com/drive/folders/DEMO-REVIEW-A9' } ] }, 'tender', 1, {});
+  const st = (key, name, status, o = {}) => Object.assign({ key, name, status, due_at: null, done_at: null, owner: null, note: null }, o);
+  pay.progress_steps = [
+    st('create_workspace', '建立工作區', 'done', { done_at: ago(20) }),
+    st('open_session', '開領標對話', 'done', { done_at: ago(1), owner: 'Company Claude', note: '領標對話在這裡：https://claude.ai/chat/demo-tender-session' }),
+    st('pay_approval', '等待付款同意', 'current', { owner: '管理員', note: '採購網領標要付費，按按鈕去付款：https://web.pcc.gov.tw/tps/QueryTender/query/searchTenderDetail?pkPmsMain=DEMO' }),
+    st('read_tender_docs', '讀招標文件', 'pending', { note: '招標文件清單：https://example.org/demo/tender-docs' }),
+    st('write_proposal', '撰寫企劃與估價', 'pending'), st('seal_and_bid', '用印與投標', 'pending'), st('result', '決標或結案', 'pending'),
+  ];
+  rows.push(pay);
   rows.filter(r => r.status === 'doing').forEach(r => {
     const st = r.progress_steps;
     if (r.progress_state === 'done') st.forEach(s => { if (s.status !== 'skipped') { s.status = 'done'; s.done_at = s.done_at || r.progress_updated_at; } });
@@ -185,6 +203,7 @@ function xssRows() {
     remind_at: null, stash_due_at: null, decided_at: null, drop_reason: null,
     folder_status: 'none', folder_name: null, folder_path: null, folder_error: null,
     progress_state: null, progress_steps: [], progress_note: null, progress_blocker: null, progress_outcome: null, progress_archive_at: null, progress_updated_at: null, progress_updated_by: null,
+    links: [{ kind: 'pool', label: XP, url: 'javascript:window.__xss=96' }, { kind: 'review', label: XP, url: 'https://example.org/review' }, { kind: XP, label: '', url: 'https://example.org/other"><img src=x onerror=window.__xss=95>' }],
   };
   return [
     Object.assign({}, common, { id: 'xss-new', lane: 'pitch', status: 'new' }),
