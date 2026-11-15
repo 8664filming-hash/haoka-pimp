@@ -1,6 +1,6 @@
 // 好咖皮條客主程式：狀態、畫面、事件。只透過 adapter.js 取得與寫入資料。版面規格見交接包 DESIGN.md。
-import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl, RK, SCAN_LANES } from './adapter.js?v5';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
-import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v5';
+import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl, RK, SCAN_LANES } from './adapter.js?v6';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
+import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v6';
 
 const $ = s => document.querySelector(s);
 const LANES = [
@@ -34,7 +34,7 @@ export const TBD = {
 // ===== 其他固定文案 =====
 const AUTH_MSG = '金鑰失效，請向管理員重新索取網址';
 const TENDER_ADMIN = '政府標案由管理員決定要不要做';   // sql/21：lane = tender 的 opp_build 只給 admin
-const OUTCOME = { submitted: '已送件', won: '得標或核定', lost: '未得標', withdrawn: '撤件放棄' };
+const OUTCOME = { won: '得標／核定', lost: '未得標', submitted: '已送件結案', withdrawn: '作廢' };   // 結案結果（sql/25 opp_archive 的 kind；看板和封存區同一套字）
 // ----- 步驟備註裡的網址 → 按鈕（只收 http(s)，經過 adapter 的 safeUrl） -----
 const PAY_STEP = 'pay_approval';   // 等待付款同意（領標付款）
 // ----- 已送件：送件之後不再看公告截止日（不顯示「截止已到／時間到」、不亮紅、不算進行中異常），倒數改看下一個內部期限 -----
@@ -96,6 +96,7 @@ const S = {
   prog: new Map(),     // id → {busy, at}：進度步驟抓過的版本（progressUpdatedAt）
   textOpen: new Set(), attOpen: new Set(), fresh: new Set(),
   scan: {}, scanBusy: new Set(),   // 立即掃描：三籃最新狀態
+  arch: { list: null, q: '', year: '', busy: false }, archMap: new Map(), dlg: null,   // 封存區、結案與徹底刪除的確認框
   msgs: new Map(), msgBusy: new Set(), pend: new Map(), draft: new Map(),   // 跟肉咖說：key＝卡片 id（不綁案子是 ''）   // attOpen：附件清單展開中的卡（重畫時保留）
 };
 let api, lastFocus = null, depth = 0, ignorePop = false;
@@ -312,7 +313,7 @@ function acard(it) {
   else if (p.k === 'overdue') meta = '<p class="meta-line fail-reason">' + esc(it.progressBlocker || '這步已過內部期限') + '</p>';
   else if (p.k === 'dlpass') meta = '<p class="meta-line fail-reason">公告截止時間已到，請確認是否已送出</p>';
   else if (folderWait(it)) meta = '<p class="meta-line"><span class="spin"></span>' + folderWaitText(it) + '</p>';
-  else if (p.k === 'done') meta = '<p class="meta-line">已完成' + (OUTCOME[it.progressOutcome] ? '：<b>' + OUTCOME[it.progressOutcome] + '</b>' : '') + (it.progressUpdatedAt ? '，<span data-rel="' + it.progressUpdatedAt + '">' + relTime(it.progressUpdatedAt, tnow()) + '</span>' : '') + '</p>';
+  else if (p.k === 'done') meta = '<p class="meta-line">' + (OUTCOME[it.progressOutcome] ? '已結案：<b>' + OUTCOME[it.progressOutcome] + '</b>' : '已完成') + (it.progressUpdatedAt ? '，<span data-rel="' + it.progressUpdatedAt + '">' + relTime(it.progressUpdatedAt, tnow()) + '</span>' : '') + '</p>';
   else meta = '<p class="meta-line">' + byLine(it.progressUpdatedAt, it.progressUpdatedBy) + '</p>';
   const sent = submitted(it);
   // 送件後（v4）：左上大字是目前步驟、旁邊狀態徽章；下一行倒數盯下一個里程碑，「已送件 11/10」縮成小標籤
@@ -422,7 +423,7 @@ function renderSheet() {
 
 // ---------------- 畫面：詳細資料抽屜 ----------------
 function viewOf() {
-  if (S.drawer && S.drawer.view === 'chat') return 'chat';
+  if (S.drawer && ['chat', 'archive', 'archived'].includes(S.drawer.view)) return S.drawer.view;
   const it = S.drawer && get(S.drawer.id); if (!it) return null;
   return it.status === 'doing' ? 'progress' : S.drawer.view;
 }
@@ -565,7 +566,7 @@ function progressBox(it) {
   else if (p.k === 'failed' && it.folderStatus === 'failed') warnLine = '<p class="prog-alert hot">資料夾沒建成：' + esc(it.folderError || '原因不明') + '。' + TBD.progressFailHelp + '</p>';
   else if (folderWait(it)) warnLine = '<p class="prog-alert calm"><span class="spin"></span>' + folderWaitText(it) + '，通常 1 到 2 分鐘內建好。</p>';
   else if (p.k === 'failed' && it.folderStatus !== 'failed') warnLine = '<p class="prog-alert hot">流程失敗：' + esc(it.progressBlocker || it.progressNote || '原因不明') + '。' + TBD.progressFailHelp + '</p>';
-  else if (p.k === 'done') warnLine = '<p class="prog-alert ok">已完成' + (OUTCOME[it.progressOutcome] ? '：' + OUTCOME[it.progressOutcome] : '') + (it.progressArchiveAt ? '。' + (it.progressArchiveAt > tnow() ? fmtDay(it.progressArchiveAt) + '從看板撤下' : '已從看板撤下') : '') + '</p>';
+  else if (p.k === 'done') warnLine = '<p class="prog-alert ok">' + (OUTCOME[it.progressOutcome] ? '已結案：' + OUTCOME[it.progressOutcome] : '已完成') + (it.progressArchiveAt ? '。' + (it.progressArchiveAt > tnow() ? fmtDay(it.progressArchiveAt) + '從看板撤下' : '已從看板撤下') : '') + '</p>';
   return '<section class="prog-box" data-pst="' + p.bar + '"><h3>進度</h3>' +
     '<div class="prog-head"><p class="ttl">' + esc(it.progressStage || '建立工作區') + '</p><span class="frac">' + fracText(it) + (it.progressStepTotal ? ' · ' : '') + pct(it) + '%</span></div>' +
     '<div class="pbar big" aria-hidden="true"><i style="width:' + pct(it) + '%"></i></div>' + warnLine +
@@ -589,6 +590,8 @@ function progressHTML(it) {
 function renderDrawer() {
   const dr = $('#drawer');
   if (S.drawer && S.drawer.view === 'chat') return renderChatDrawer(dr);
+  if (S.drawer && S.drawer.view === 'archive') return renderArchiveDrawer(dr);
+  if (S.drawer && S.drawer.view === 'archived') return renderArchivedDrawer(dr);
   const it = S.drawer && get(S.drawer.id), view = viewOf();
   if (!it || !view) { dr.classList.remove('show'); return; }
   const keep = chatFocus();
@@ -599,13 +602,14 @@ function renderDrawer() {
     body = progressHTML(it);
     const canCopy = it.folderStatus === 'done' && /^\//.test(it.folderPath);
     const btns = (canCopy ? '<button class="btn btn-primary" data-act="copy-path" data-id="' + id + '" type="button">複製本機資料夾位置</button>' : '') +
-      '<button class="btn ' + (canCopy ? 'btn-ghost' : 'btn-primary') + '" data-act="close-drawer" type="button">回到面板</button>';
+      (can('act') ? '<button class="btn btn-ghost" data-act="arch-start" data-id="' + id + '" type="button">' + (it.progressStatus === 'done' ? '改結案結果…' : '結案…') + '</button>' : '') +
+      '<button class="btn ' + (canCopy ? 'btn-ghost' : 'btn-primary') + '" data-act="close-drawer" type="button">回到面板</button>' + purgeBtn(it);
     foot = '<div class="df prog-foot">' + btns + '</div>';
   } else if (view === 'full') {
     label = '完整內容'; body = fullHTML(it);
     foot = can('act') && (it.status === 'new' || it.status === 'snoozed')
       ? '<div class="df"><button class="btn btn-ghost del" data-act="no" data-id="' + id + '" type="button">不做</button>' +
-        (canBuild(it) ? '<button class="btn btn-primary" data-act="yes" data-id="' + id + '" type="button">要做，建立公司工作區</button>' : '<p class="df-note">' + TENDER_ADMIN + '</p>') + '</div>'
+        (canBuild(it) ? '<button class="btn btn-primary" data-act="yes" data-id="' + id + '" type="button">要做，建立公司工作區</button>' : '<p class="df-note">' + TENDER_ADMIN + '</p>') + purgeBtn(it) + '</div>'
       : '<div class="df"><button class="btn btn-primary" data-act="close-drawer" type="button">回到面板</button></div>';
   } else {
     label = '快速預覽'; body = previewHTML(it);
@@ -626,7 +630,8 @@ function renderDrawer() {
 
 function renderAll() {
   renderLive(); renderNotice(); renderSummary(); renderBoard(); renderSheet();
-  if (S.drawer) { if (S.drawer.view !== 'chat' && !get(S.drawer.id)) closeDrawer(true); else renderDrawer(); }
+  if (S.drawer) { if (!['chat', 'archive', 'archived'].includes(S.drawer.view) && !get(S.drawer.id)) closeDrawer(true); else renderDrawer(); }
+  renderDlg();
   renderRk();
   syncOverlay();
 }
@@ -771,7 +776,7 @@ async function ensureDetail(id, force) {
     else if (it.crawlStatus === 'done' || it.hasFullText) c = (await api.get(id)) || it;
     put(c); redrawDrawer(id);
     const t0 = tnow();
-    while (c.crawlStatus === 'crawling' && tnow() - t0 < 60000) { await wait(2000); c = (await api.get(id)) || c; put(c); redrawDrawer(id); }
+    while (c.crawlStatus === 'crawling' && tnow() - t0 < 60000 && get(id)) { await wait(2000); c = (await api.get(id)) || c; put(c); redrawDrawer(id); }
     if (c.crawlStatus === 'crawling') {
       S.detail.set(id, { busy: false, timedOut: true, t0: (S.detail.get(id) && S.detail.get(id).t0) || t0 });
       saveSnapshot();
@@ -780,6 +785,7 @@ async function ensureDetail(id, force) {
     if (c.crawlStatus === 'done' && !c.detailText) { c = (await api.get(id)) || c; put(c); }
     saveSnapshot();
   } catch (e) {
+    if (!get(id)) return;   // 這張卡剛被徹底刪除：等全文的請求回 not found 是正常的，不要蓋掉「已徹底刪除」
     if (e instanceof AdapterError && e.kind === 'auth') setAuth();
     if (e instanceof AdapterError && e.kind === 'perm') loadWho();
     toast('讀全文沒有成功：' + reason(e), { bad: true });
@@ -956,18 +962,22 @@ const SCAN_COOL = 15 * 60e3;
 const scanning = k => { const x = S.scan[k]; return !!x && (x.status === 'queued' || x.status === 'running'); };
 const hm = ms => { const d = new Date(ms + 8 * H); return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0'); };
 const lastScan = x => x && (x.lastDoneAt || (x.status === 'done' ? x.doneAt : null));
+// 掃描進度（F 兩段式）：排隊中 → 掃描中 → AI 判讀中 → 送進看板中；後端還沒給 phase 時，running 一律寫「掃描中」
+const scanPhase = x => !x ? '' : x.status === 'queued' ? '排隊中' : ({ judging: 'AI 判讀中', sending: '送進看板中' }[x.phase] || '掃描中');
 function scanBox(k) {
   if (!SCAN_LANES.includes(k)) return '';
   const x = S.scan[k], last = lastScan(x), now = tnow();
   const lastTxt = last ? '上次掃描 ' + (now - last < D ? hm(last) : fmtDate(last)) : '';
   let st = '';
-  if (scanning(k)) st = '<span class="spin" aria-hidden="true"></span>掃描中，約 1～5 分鐘';
-  else if (x && x.status === 'done' && x.doneAt && now - x.doneAt < SCAN_COOL) st = '剛掃完：' + (x.added == null ? '完成' : '新增 ' + x.added + ' 張') + (lastTxt ? ' · ' + lastTxt : '');
-  else if (x && x.status === 'failed') st = '上次掃描沒有成功' + (lastTxt ? ' · ' + lastTxt : '');
+  const res = x && (x.resultMain || (x.added == null ? '' : '新增 ' + x.added + ' 件'));
+  const det = x && x.resultDetail ? '<small class="scan-det">' + esc(x.resultDetail) + '</small>' : '';
+  if (scanning(k)) st = '<span class="spin" aria-hidden="true"></span>' + scanPhase(x) + '，全程約 2～5 分鐘';
+  else if (x && x.status === 'done' && x.doneAt && now - x.doneAt < SCAN_COOL) st = '<span>完成：' + esc(res || '沒有新的') + (lastTxt ? ' · ' + lastTxt : '') + det + '</span>';
+  else if (x && x.status === 'failed') st = '<span>失敗：' + esc(x.resultText || '沒有回報原因') + (lastTxt ? ' · ' + lastTxt : '') + '</span>';
   else st = lastTxt;
   const cool = last && now - last < SCAN_COOL;
   const btn = !can('act') ? ''
-    : scanning(k) ? '<button class="scan-btn" type="button" disabled aria-disabled="true">掃描中</button>'
+    : scanning(k) ? '<button class="scan-btn" type="button" disabled aria-disabled="true">' + scanPhase(x) + '</button>'
     : cool ? '<button class="scan-btn" type="button" disabled aria-disabled="true" title="15 分鐘內掃過，晚點再掃">剛掃過</button>'
     : '<button class="scan-btn" data-act="scan" data-lane="' + k + '" type="button" aria-label="立即掃描' + LN[k] + '">立即掃描</button>';
   return '<div class="scan" data-scan="' + k + '" aria-live="polite">' + btn + (st ? '<span class="scan-st">' + st + '</span>' : '') + '</div>';
@@ -998,15 +1008,201 @@ async function scanNow(k) {
   try {
     const res = await api.scanRequest(k);
     if (res) S.scan[k] = Object.assign({}, res, { lastDoneAt: res.lastDoneAt || (prev && prev.lastDoneAt) || null });   // 請求那筆不帶 last_done_at，沿用上次的
-    toast(res && res.state === 'already' ? '「' + LN[k] + '」已經在掃描了，約 1～5 分鐘'
+    toast(res && res.state === 'already' ? '「' + LN[k] + '」已經在掃描了，全程約 2～5 分鐘'
       : res && res.state === 'recent' ? '「' + LN[k] + '」15 分鐘內剛掃過，先看看新卡'
-      : '已開始掃描「' + LN[k] + '」，約 1～5 分鐘');
+      : '已開始掃描「' + LN[k] + '」，掃描加 AI 判讀全程約 2～5 分鐘');
   } catch (e) {
     S.scan[k] = prev;   // 回滾
     if (e instanceof AdapterError && e.kind === 'auth') setAuth();
     if (e instanceof AdapterError && e.kind === 'perm') loadWho();
     toast('沒有開始掃描：' + reason(e), { bad: true });
   } finally { S.scanBusy.delete(k); renderScan(); kickPoll(); }
+}
+
+// ---------------- 封存區、結案與徹底刪除（v6；後端 opp_archive／opp_unarchive／opp_archive_list／opp_purge，sql/25） ----------------
+const KIND = OUTCOME;
+const KIND_DESC = { won: '得標或補助核定', lost: '沒有得標或沒入選', submitted: '已經送件，後續不追了', withdrawn: '做一半不要了' };
+const KIND_CLS = { won: 'k-won', lost: 'k-lost', submitted: 'k-sub', withdrawn: 'k-wd' };
+const getAny = id => get(id) || S.archMap.get(id);
+const shortName = it => (it.shortTitle || it.title || '').trim();
+const purgeOk = (it, t) => { t = String(t || '').trim(); return !!t && (t === shortName(it) || t === (it.title || '').trim()); };
+const kindBadge = it => it.archiveKind ? '<span class="kind-b ' + KIND_CLS[it.archiveKind] + '">' + KIND[it.archiveKind] + '</span>' : '<span class="kind-b k-lost">已結案</span>';
+// 徹底刪除：只有 admin 才畫，放在底欄最右邊（跟待看卡的「刪掉」不同：刪掉 72 小時內救得回來，徹底刪除救不回來）
+const purgeBtn = it => can('admin') ? '<button class="btn btn-ghost purge" data-act="purge-start" data-id="' + esc(it.id) + '" type="button">徹底刪除</button>' : '';
+
+// ----- 確認框（結案、徹底刪除共用） -----
+function closeDlg() { S.dlg = null; renderDlg(); const d = $('#drawer.show'); if (d) d.querySelector('.xb')?.focus({ preventScroll: true }); }
+function renderDlg() {
+  const wrap = $('#dlg'); if (!wrap) return;
+  const d = S.dlg, it = d && getAny(d.id);
+  if (!d || !it) { wrap.hidden = true; S.dlg = null; return; }
+  const box = wrap.querySelector('.dlg'), name = esc(shortName(it));
+  const keepFocus = document.activeElement && box.contains(document.activeElement) ? document.activeElement.id : '';
+  let html = '';
+  if (d.type === 'archive' && d.step === 'pick') {
+    html = '<h2 id="dlg-t">' + (d.re ? '改結案結果「' : '結案「') + name + '」</h2><p class="dlg-p">' + (d.re ? '只改結果，結案日不變。' : '選一個結果。案子會在進行中再留 14 天才從看板撤下，封存區隨時找得到；資料夾和 Drive 都保留。') + '</p>' +
+      '<div class="kind-list" role="radiogroup" aria-label="結案結果">' + ['won', 'lost', 'submitted', 'withdrawn'].map(k =>
+        '<label class="kind-opt' + (d.kind === k ? ' on' : '') + '"><input type="radio" name="arch-kind" value="' + k + '"' + (d.kind === k ? ' checked' : '') + '><span><b>' + KIND[k] + '</b><small>' + KIND_DESC[k] + '</small></span></label>').join('') + '</div>' +
+      '<label class="dlg-l" for="arch-note">備註（選填）</label><input id="arch-note" class="dlg-in" type="text" maxlength="200" placeholder="例如：決標公告日 11/20" value="' + esc(d.note) + '">' +
+      '<div class="dlg-acts"><button class="btn btn-ghost" data-act="dlg-close" type="button">取消</button><button class="btn btn-primary" data-act="arch-next" type="button"' + (d.kind ? '' : ' disabled') + '>下一步</button></div>';
+  } else if (d.type === 'archive') {
+    html = '<h2 id="dlg-t">確定結案？</h2><p class="dlg-p">' + (d.re ? '確定把「' + name + '」的結果改成『' + KIND[d.kind] + '』？' : '確定把「' + name + '」封存為『' + KIND[d.kind] + '』？') + '</p>' + (d.note ? '<p class="dlg-note">備註：' + esc(d.note) + '</p>' : '') +
+      (d.re ? '' : '<p class="dlg-p small">' + (can('admin') ? '封存後幾秒內可以按「復原」，之後在封存區按「重新打開」。' : '封存後要找管理員才能重新打開。') + '</p>') +
+      '<div class="dlg-acts"><button class="btn btn-ghost" data-act="arch-back-pick" type="button">返回</button><button class="btn btn-primary" data-act="arch-confirm" type="button">' + (d.re ? '確定修改' : '確定封存') + '</button></div>';
+  } else if (d.type === 'purge') {
+    const ok = purgeOk(it, d.typed);
+    html = '<h2 id="dlg-t" class="danger">徹底刪除</h2><p class="dlg-p">這會讓「' + name + '」從面板徹底消失，無法復原。電腦裡的資料夾和 Drive 檔案不會被刪。</p>' +
+      '<label class="dlg-l" for="purge-in">請輸入短案名「' + name + '」才能刪除</label><input id="purge-in" class="dlg-in" type="text" autocomplete="off" value="' + esc(d.typed) + '">' +
+      '<div class="dlg-acts"><button class="btn btn-ghost" data-act="dlg-close" type="button">取消</button><button class="btn btn-danger" data-act="purge-confirm" type="button"' + (ok ? '' : ' disabled') + '>徹底刪除</button></div>';
+  }
+  box.innerHTML = html; wrap.hidden = false;
+  const f = (keepFocus && document.getElementById(keepFocus)) || box.querySelector('#purge-in, input[name=arch-kind]:checked, input[name=arch-kind], .btn-primary');
+  f && f.focus({ preventScroll: true });
+}
+document.addEventListener('input', e => {
+  if (!S.dlg) return;
+  if (e.target.name === 'arch-kind') { S.dlg.kind = e.target.value; renderDlg(); }
+  else if (e.target.id === 'arch-note') S.dlg.note = e.target.value;
+  else if (e.target.id === 'purge-in') { S.dlg.typed = e.target.value; const b = $('#dlg [data-act=purge-confirm]'), it = getAny(S.dlg.id); if (b && it) b.disabled = !purgeOk(it, S.dlg.typed); }
+});
+document.addEventListener('change', e => { if (S.dlg && e.target.name === 'arch-kind') { S.dlg.kind = e.target.value; renderDlg(); } });
+function archNext() { if (!S.dlg || !S.dlg.kind) return; const n = $('#arch-note'); if (n) S.dlg.note = n.value.trim(); S.dlg.step = 'confirm'; renderDlg(); }
+async function doArchive() {
+  const d = S.dlg, it = d && get(d.id); if (!it) { closeDlg(); return; }
+  if (!can('act')) { toast(reason(new AdapterError('perm', '')), { bad: true }); return; }
+  const prev = { ...it }, kind = d.kind, note = d.note, re = it.progressStatus === 'done';
+  S.dlg = null; renderDlg();
+  // 樂觀（sql/25）：卡片仍是 doing，進度標成已結案、未完成步驟補完（作廢標略過）；結案 14 天後才從看板撤下，結案日改結果時不變
+  const at = re && it.progressArchiveAt ? it.progressArchiveAt : tnow() + 14 * D;
+  const fin = kind === 'withdrawn' ? 'skipped' : 'done';
+  S.items.set(it.id, { ...it, progressStatus: 'done', progressState: 'done', progressOutcome: kind, archiveKind: kind, progressArchiveAt: at, archivedAt: at - 14 * D,
+    progressNote: note || it.progressNote, progressPct: 100,
+    progressSteps: re || !it.progressSteps ? it.progressSteps : it.progressSteps.map(s => s.status === 'done' || s.status === 'skipped' ? s : { ...s, status: fin, doneAt: fin === 'done' ? tnow() : null }) });
+  locks.add(it.id); renderAll();
+  toast(re ? '已把「' + nm(it) + '」改成『' + KIND[kind] + '』' : '已結案「' + nm(it) + '」：' + KIND[kind] + '。14 天後從看板撤下，封存區隨時找得到',
+    { undo: can('admin') && !re ? () => doUnarchive(it.id, prev) : null });   // 復原只給 admin（opp_unarchive）；改結果不給復原
+  try {
+    const res = await api.archive(it.id, kind, note);
+    mutDone[it.id] = tnow();
+    if (res) { S.items.set(it.id, mergeCard(get(it.id), res)); S.archMap.set(it.id, get(it.id)); }
+    S.arch.list = null;   // 封存區下次打開重抓
+    saveSnapshot();
+  } catch (e) {
+    S.items.set(it.id, prev);
+    if (e instanceof AdapterError && e.kind === 'auth') setAuth();
+    if (e instanceof AdapterError && e.kind === 'perm') loadWho();
+    toast('沒有封存成功，已經還原：' + reason(e), { bad: true });
+  } finally { locks.delete(it.id); renderAll(); }
+}
+async function doUnarchive(id, prev) {
+  try {
+    const res = await api.unarchive(id);
+    S.items.set(id, res ? mergeCard(prev, res) : prev); S.archMap.delete(id); S.arch.list = null;
+    if (S.drawer && S.drawer.view === 'archived' && S.drawer.id === id) S.drawer = { id, view: 'progress' };   // 從封存區重新打開：直接看它的進度
+    toast('已重新打開，放回進行中'); renderAll(); refresh();
+  } catch (e) {
+    if (e instanceof AdapterError && e.kind === 'perm') loadWho();
+    toast('沒有復原成功：' + reason(e), { bad: true });
+  }
+}
+async function doPurge() {
+  const d = S.dlg, it = d && getAny(d.id); if (!it) { closeDlg(); return; }
+  const typed = d.typed.trim(); if (!purgeOk(it, typed) || !can('admin')) return;
+  const b = $('#dlg [data-act=purge-confirm]'); if (b) { b.disabled = true; b.textContent = '刪除中…'; }
+  try {
+    await api.purge(it.id, typed);
+    S.items.delete(it.id); S.archMap.delete(it.id);
+    if (S.arch.list) S.arch.list = S.arch.list.filter(x => x.id !== it.id);
+    S.dlg = null;
+    if (S.drawer && (S.drawer.id === it.id)) { if (S.drawer.view === 'archived') { S.drawer = { id: '__arch', view: 'archive' }; } else closeDrawer(true); }
+    toast('已徹底刪除');   // 沒有復原鍵
+    saveSnapshot(); renderAll();
+  } catch (e) {
+    if (e instanceof AdapterError && e.kind === 'auth') setAuth();
+    if (e instanceof AdapterError && e.kind === 'perm') loadWho();
+    toast('沒有刪除：' + (e instanceof AdapterError && /confirm|title/i.test(e.message) ? '短案名不對' : reason(e)), { bad: true });
+    renderDlg();
+  }
+}
+
+// ----- 封存區抽屜：搜尋（案名、機關、案號）＋年份篩選；點一列看唯讀詳細 -----
+const thisYear = () => new Date(tnow() + 8 * H).getUTCFullYear();
+function openArchive() {
+  if (!S.drawer) lastFocus = document.activeElement;
+  S.drawer = { id: '__arch', view: 'archive' };
+  if (!S.arch.list) loadArchive();
+  renderDrawer(); syncOverlay();
+}
+let archT;
+async function loadArchive() {
+  if (!api || !api.archiveList || S.net === 'auth') return;
+  const q = S.arch.q, y = S.arch.year, ticket = (S.arch.ticket = (S.arch.ticket || 0) + 1);
+  S.arch.busy = true; if (S.drawer && S.drawer.view === 'archive') renderDrawer();
+  try {
+    const list = await api.archiveList(q, y, 100);
+    if (ticket !== S.arch.ticket) return;   // 打字很快時只用最後一次的結果
+    S.arch.list = list; list.forEach(x => S.archMap.set(x.id, x)); S.arch.err = false;
+  } catch (e) {
+    if (e instanceof AdapterError && e.kind === 'auth') { setAuth(); renderAll(); return; }
+    S.arch.err = true; if (!S.arch.list) S.arch.list = [];
+  } finally { if (ticket === S.arch.ticket) { S.arch.busy = false; if (S.drawer && S.drawer.view === 'archive') renderDrawer(); } }
+}
+function archRow(it) {
+  const id = esc(it.id), real = it.folderStatus === 'done' && /^\//.test(it.folderPath);
+  const ls = ['pool', 'review'].map(k => linkOf(it, k)).filter(Boolean);
+  return '<article class="arow" data-act="arch-open" data-id="' + id + '" tabindex="0" aria-label="' + esc(it.title) + '，' + (KIND[it.archiveKind] || '已結案') + '">' +
+    '<div class="arow-h">' + kindBadge(it) + demo(it) + (it.archivedAt ? '<span class="arow-d">' + fmtDay(it.archivedAt) + ' 結案</span>' : '') + '</div>' +
+    '<h3 class="sb">' + softBreak(it.title) + '</h3>' + (it.org ? '<p class="arow-o">' + esc(it.org) + (it.caseNo ? ' · ' + esc(it.caseNo) : '') + '</p>' : '') +
+    ((ls.length || real) ? '<div class="arow-a">' + ls.map(l => extLink(l, 'mini-link')).join('') + (real ? '<button class="mini-link btn-copy" data-act="copy-path" data-id="' + id + '" type="button">複製本機資料夾位置</button>' : '') + '</div>' : '') + '</article>';
+}
+function renderArchiveDrawer(dr) {
+  const ae = document.activeElement, kq = ae && ae.id === 'arch-q' ? [ae.selectionStart, ae.selectionEnd] : null;
+  const sc = dr.querySelector('.db') && dr.dataset.key === '__arch' ? dr.querySelector('.db').scrollTop : 0;
+  const y = thisYear(), years = [y, y - 1, y - 2, y - 3];
+  const l = S.arch.list;
+  const body = !l ? '<p class="chat-empty">讀取封存區中…</p>'
+    : l.length ? '<div class="alist">' + l.map(archRow).join('') + '</div>'
+    : '<p class="chat-empty">' + (S.arch.err ? '封存區讀不到，請稍後再試。' : S.arch.q || S.arch.year ? '找不到符合的結案案子。' : '還沒有結案的案子。在進行中的進度按「結案…」就會放到這裡。') + '</p>';
+  dr.innerHTML = '<div class="dh"><span>封存區</span><button class="xb" data-act="close-drawer" type="button" aria-label="關閉">×</button></div>' +
+    '<div class="db"><div class="dt"><div class="afilter"><input id="arch-q" class="dlg-in" type="search" placeholder="搜尋案名、機關、案號" aria-label="搜尋封存區" value="' + esc(S.arch.q) + '">' +
+    '<select id="arch-year" class="dlg-in" aria-label="結案年份"><option value=""' + (S.arch.year ? '' : ' selected') + '>全部年份</option>' + years.map(v => '<option value="' + v + '"' + (String(S.arch.year) === String(v) ? ' selected' : '') + '>' + v + ' 年</option>').join('') + '</select></div>' +
+    '<p class="dt-meta" aria-live="polite">' + (S.arch.busy ? '<span class="spin"></span> 搜尋中…' : l ? '共 ' + l.length + ' 筆' : '') + '</p>' + body + '</div></div>' +
+    '<div class="df"><button class="btn btn-ghost" data-act="close-drawer" type="button">回到面板</button></div>';
+  dr.setAttribute('aria-label', '封存區'); dr.dataset.key = '__arch';
+  dr.querySelector('.db').scrollTop = sc; dr.classList.add('show');
+  if (kq) { const t = $('#arch-q'); t.focus({ preventScroll: true }); try { t.setSelectionRange(kq[0], kq[1]); } catch (e) {} }
+}
+document.addEventListener('input', e => {
+  if (e.target.id !== 'arch-q') return;
+  S.arch.q = e.target.value; clearTimeout(archT); archT = setTimeout(loadArchive, 300);
+});
+document.addEventListener('change', e => { if (e.target.id === 'arch-year') { S.arch.year = e.target.value; loadArchive(); } });
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('arow')) openArchived(e.target.dataset.id); });
+// 已結案那張卡的唯讀詳細
+function openArchived(id) {
+  if (!S.archMap.get(id)) return;
+  S.drawer = { id, view: 'archived' };
+  renderDrawer(); syncOverlay();
+  if (api.progress && !S.archMap.get(id).progressSteps) api.progress(id).then(c => { if (c) { const o = S.archMap.get(id) || {}; S.archMap.set(id, { ...o, ...c, archiveKind: c.archiveKind || o.archiveKind, archivedAt: o.archivedAt || c.archivedAt }); if (S.drawer && S.drawer.id === id) renderDrawer(); } }).catch(() => {});   // 卡片仍是 doing，opp_progress 拿得到完整內容與步驟
+}
+function renderArchivedDrawer(dr) {
+  const it = S.archMap.get(S.drawer.id);
+  if (!it) { S.drawer = { id: '__arch', view: 'archive' }; return renderArchiveDrawer(dr); }
+  const real = it.folderStatus === 'done' && /^\//.test(it.folderPath), st = it.progressSteps;
+  const body = '<div class="dt">' + head(it, kindBadge(it)) +
+    '<p class="dt-line">' + esc(amtText(it)) + (it.archivedAt ? ' · ' + fmtDate(it.archivedAt) + ' 結案' : '') + '</p>' +
+    '<section class="prog-box arch-box"><h3>結案</h3><p class="prog-head"><span class="ttl">' + (KIND[it.archiveKind] || '已結案') + '</span></p>' +
+    (it.progressNote ? '<p class="prog-note sbp">' + softBreak(it.progressNote) + '</p>' : '') +
+    (it.progressUpdatedBy ? '<p class="prog-upd">最後由 ' + esc(it.progressUpdatedBy) + ' 更新</p>' : '') +
+    (st && st.length ? '<ol class="steps">' + st.map((x, i, a) => stepRow(x, i, a, it)).join('') + '</ol>' : '') +
+    (real ? '<div class="fold-row"><p class="prog-upd">工作資料夾</p><div class="path">' + esc(it.folderPath) + '</div></div>' : '') + filesRow(it) + '</section>' +
+    structBox(it, false) + factsBox(it) + '<section class="dt-sec dt-src"><h3>來源</h3>' + metaLine(it) + link(it) + '</section></div>';
+  dr.innerHTML = '<div class="dh"><span>封存的案子（唯讀）</span><button class="xb" data-act="close-drawer" type="button" aria-label="關閉">×</button></div><div class="db">' + body + '</div>' +
+    '<div class="df prog-foot">' + (real ? '<button class="btn btn-primary" data-act="copy-path" data-id="' + esc(it.id) + '" type="button">複製本機資料夾位置</button>' : '') +
+    '<button class="btn ' + (real ? 'btn-ghost' : 'btn-primary') + '" data-act="arch-back" type="button">回到封存區</button>' +
+    (can('admin') ? '<button class="btn btn-ghost" data-act="arch-reopen" data-id="' + esc(it.id) + '" type="button">重新打開</button>' : '') + purgeBtn(it) + '</div>';
+  dr.setAttribute('aria-label', '封存的案子'); dr.dataset.key = it.id + 'archived';
+  dr.classList.add('show');
 }
 // ---------------- 讀取：快照、逾時、輪詢、即時 ----------------
 // 開頁時算一次：金鑰失效後 KEY 會被清空，要靠這個值刪掉那把金鑰的快照（D 審稿 #7）
@@ -1091,7 +1287,7 @@ const ping = () => { clearTimeout(pingT); pingT = setTimeout(refresh, 150); };
 
 // ---------------- 事件 ----------------
 function copyPath(id) {
-  const it = get(id); if (!it || !it.folderPath) return;
+  const it = getAny(id); if (!it || !it.folderPath) return;
   const ok = () => toast('已複製本機資料夾位置'), no = () => toast('這個瀏覽器不讓複製，請長按路徑自己複製', { bad: true });
   // 備援：剪貼簿 API 不能用或被拒（http、內嵌瀏覽器、舊瀏覽器）時，改用隱藏文字框複製
   const legacy = () => {
@@ -1112,6 +1308,8 @@ document.addEventListener('click', e => {
   const tab = e.target.closest('[data-tab]'); if (tab) { S.tab = tab.dataset.tab; renderBoard(); return; }
   if (e.target.closest('#hpill,#holdbtn')) { openSheet(); return; }
   if (e.target.closest('#rkbtn')) { openChat(); return; }
+  if (e.target.closest('#archbtn')) { openArchive(); return; }
+  if (e.target.id === 'dlg') { closeDlg(); return; }
   if (a) {
     switch (a) {
       case 'del': actDel(id); break;
@@ -1132,6 +1330,16 @@ document.addEventListener('click', e => {
       case 'open-hold': openSheet(); break;
       case 'tab-active': S.tab = 'active'; renderBoard(); break;
       case 'copy-path': copyPath(id); break;
+      case 'arch-start': { const a = get(id), re = !!(a && a.progressStatus === 'done'); S.dlg = { type: 'archive', id, kind: re && a.archiveKind || '', note: '', step: 'pick', re }; renderDlg(); break; }
+      case 'arch-reopen': doUnarchive(id, getAny(id)); break;
+      case 'arch-next': archNext(); break;
+      case 'arch-back-pick': S.dlg.step = 'pick'; renderDlg(); break;
+      case 'arch-confirm': doArchive(); break;
+      case 'arch-open': if (!e.target.closest('a[href]')) openArchived(id); break;   // 點列裡的 Pool／內審連結只開連結
+      case 'arch-back': openArchive(); break;
+      case 'purge-start': S.dlg = { type: 'purge', id, typed: '' }; renderDlg(); break;
+      case 'purge-confirm': doPurge(); break;
+      case 'dlg-close': closeDlg(); break;
       case 'msg-send': msgSend(act.dataset.key || ''); break;
       case 'scan': scanNow(act.dataset.lane); break;
     }
@@ -1144,10 +1352,10 @@ document.addEventListener('click', e => {
   }
 });
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { if (S.drawer) closeDrawer(); else if (S.sheet) closeSheet(); return; }
+  if (e.key === 'Escape') { if (S.dlg) closeDlg(); else if (S.drawer) closeDrawer(); else if (S.sheet) closeSheet(); return; }
   if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('card')) { const it = get(e.target.dataset.id); if (it) openDrawer(it.id, it.status === 'doing' ? 'progress' : 'preview'); }
-  if (e.key === 'Tab' && (S.drawer || S.sheet)) {         // 焦點只在最上層的疊層內打轉
-    const box = S.drawer ? $('#drawer') : $('#sheet');
+  if (e.key === 'Tab' && (S.dlg || S.drawer || S.sheet)) {         // 焦點只在最上層的疊層內打轉
+    const box = S.dlg ? $('#dlg') : S.drawer ? $('#drawer') : $('#sheet');
     const f = [...box.querySelectorAll('button,a[href],summary,[tabindex="0"]')].filter(x => !x.disabled && x.offsetParent !== null);
     if (!f.length) return; const first = f[0], last = f[f.length - 1];
     if (!box.contains(document.activeElement)) { first.focus(); e.preventDefault(); }
@@ -1162,7 +1370,7 @@ window.addEventListener('popstate', () => {
 // ---------------- 手機左右滑動切換籃子（959 以下；960 以上五欄同時顯示，不啟用） ----------------
 // 規則：水平位移 > 60px 而且明顯大於垂直位移才算；抽屜、待決區、toast 開著不觸發；從螢幕左緣 24px 內開始的讓給 iOS 返回手勢。
 const SW = { mq: matchMedia('(max-width: 959px)'), rm: matchMedia('(prefers-reduced-motion: reduce)'), on: false, x: 0, y: 0 };
-const overlayOpen = () => !!S.drawer || S.sheet || $('#toast').classList.contains('show');
+const overlayOpen = () => !!S.drawer || !!S.dlg || S.sheet || $('#toast').classList.contains('show');
 function switchTab(k, dir) {
   if (k === S.tab) return;
   S.tab = k; renderBoard();

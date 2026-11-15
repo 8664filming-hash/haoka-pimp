@@ -12,6 +12,7 @@
 //   await api.progress(id)        → 單張卡，含 progressSteps，不含全文（opp_progress）
 //   await api.act(id, action, o)  → 更新後的卡。action：dive｜stash｜unstash｜deleted｜skipped｜restore｜build
 //   await api.msgList(itemId, n) → 跟肉咖說的訊息（新到舊）；await api.msgAdd(itemId, body) → 新訊息或 null
+//   await api.archive(id, kind, note)／unarchive(id)／archiveList(q, year, n)／purge(id, 短案名) → 封存區與徹底刪除
 //   await api.scanStatus() → 三籃掃描狀態；await api.scanRequest(lane) → 該籃的新狀態或 null
 //   api.subscribe(onPing, onState)→ 取消函式；onPing() 代表「有變動，請重抓」，onState(bool) 代表即時連線狀態
 //   網頁端沒有任何寫入進度的呼叫：進度只由企劃流程用 planner 金鑰回寫。
@@ -31,7 +32,8 @@ export const CONFIG = {
   RPC: { whoami: 'opp_whoami', list: 'opp_list', get: 'opp_get', progress: 'opp_progress', topic: 'get_opp_realtime_topic',
          dive: 'opp_dive', stash: 'opp_stash', unstash: 'opp_unstash', drop: 'opp_drop', restore: 'opp_restore', build: 'opp_build',
          msgAdd: 'opp_msg_add', msgList: 'opp_msg_list',   // 跟肉咖說（sql/24，C 做）
-         scanRequest: 'opp_scan_request', scanStatus: 'opp_scan_status' },   // 立即掃描（C 做）
+         scanRequest: 'opp_scan_request', scanStatus: 'opp_scan_status',   // 立即掃描（C 做）
+         archive: 'opp_archive', unarchive: 'opp_unarchive', archiveList: 'opp_archive_list', purge: 'opp_purge' },   // 封存區與徹底刪除（sql/25，C 做）
   MSG_LIMIT: 50,
 };
 
@@ -77,7 +79,7 @@ export async function createAdapter() {
   const configured = CONFIG.SUPABASE_URL.startsWith('http') && !CONFIG.SUPABASE_URL.includes('YOUR-PROJECT-REF') && !CONFIG.SUPABASE_ANON_KEY.startsWith('YOUR-');
   if (!configured) console.info('[好咖皮條客] adapter.js 的 SUPABASE_URL / SUPABASE_ANON_KEY 還是待填佔位，目前顯示示範資料');
   if (hasKey() && !forceMock && configured) return liveAdapter();
-  const { mockAdapter } = await import('./mock.js?v5');   // ?v 跟 sw.js 的 CACHE 一起換
+  const { mockAdapter } = await import('./mock.js?v6');   // ?v 跟 sw.js 的 CACHE 一起換
   return mockAdapter(forceMock ? mockFlag : '');
 }
 
@@ -90,6 +92,7 @@ const str = v => (v == null ? '' : String(v));
 export const safeUrl = v => { const u = str(v).trim(); return /^https?:\/\//i.test(u) ? u : ''; };
 // 正式連結欄位 links（sql/23）：[{kind, label, url}]，kind = pool｜review｜pay｜session｜other；只收 https://
 export const LINK_KINDS = ['pool', 'review', 'pay', 'session', 'other'];
+export const ARCHIVE_KINDS = ['won', 'lost', 'submitted', 'withdrawn'];   // 得標／核定、未得標、已送件結案、作廢
 function links(v) {
   if (!Array.isArray(v)) return [];
   return v.filter(x => x && typeof x === 'object').map(x => ({ kind: LINK_KINDS.includes(x.kind) ? x.kind : 'other', label: str(x.label).trim(), url: /^https:\/\//i.test(str(x.url).trim()) ? str(x.url).trim() : '' })).filter(x => x.url);
@@ -106,6 +109,7 @@ function steps(v) {
   }));
 }
 
+const closedRow = r => r.progress_state === 'done' || r.progress_status === 'done';
 export function normalize(r) {
   const status = r.status === 'stashed' ? 'snoozed' : (['new', 'doing', 'dropped', 'expired'].includes(r.status) ? r.status : 'new');
   return {
@@ -124,6 +128,9 @@ export function normalize(r) {
     folderStatus: str(r.folder_status) || 'none', folderError: str(r.folder_error), folderName: str(r.folder_name), folderPath: str(r.folder_path),
     notionUrl: safeUrl(r.notion_url), notionStatus: str(r.notion_status),
     links: links(r.links),   // 沒有就是空陣列
+    // 結案（sql/25）：卡片仍是 doing，progress_state=done、progress_outcome＝結果；結案日＝progress_archive_at − 14 天。封存區列表另給 outcome、closed_at。
+    archiveKind: closedRow(r) && ARCHIVE_KINDS.includes(r.progress_outcome) ? r.progress_outcome : ARCHIVE_KINDS.includes(r.outcome) ? r.outcome : '',
+    archivedAt: ts(r.closed_at) || (closedRow(r) && ts(r.progress_archive_at) ? ts(r.progress_archive_at) - 14 * 864e5 : null),
     dropReason: str(r.drop_reason),
     // 進度摘要（opp_list 每張 doing 卡都有）。progress_status 由後端 _opp_card 現算，前端照用。
     progressStatus: PROG_ST.includes(r.progress_status) ? r.progress_status : (status === 'doing' ? 'active' : 'none'),
@@ -152,7 +159,10 @@ function scanAdded(r) {   // result 可能是數字、{added|new|count}、或文
   const m = String(r == null ? '' : r).match(/\d+/); return m ? Number(m[0]) : null;
 }
 export function normalizeScan(x) {
-  return { lane: str(x.lane), status: str(x.status), added: scanAdded(x.result), resultText: typeof x.result === 'string' ? x.result : '',
+  // phase（F 兩段式）：running 時是 scanning／judging／sending，done、failed 後是 null。result 例：「新增 3 件、重複 2 件（AI 判讀：推薦 6、…）」
+  const rt = typeof x.result === 'string' ? x.result.trim() : '', m = rt.match(/^([^（(]*)[（(](.*)[）)]\s*$/);
+  return { lane: str(x.lane), status: str(x.status), phase: ['scanning', 'judging', 'sending'].includes(x.phase) ? x.phase : '',
+    added: scanAdded(m ? m[1] : x.result), resultText: rt, resultMain: m ? m[1].trim() : rt, resultDetail: m ? m[2].trim() : '',
     createdAt: ts(x.created_at), doneAt: ts(x.done_at), lastDoneAt: ts(x.last_done_at) };
 }
 // sql/26：opp_scan_status 回 {server_time, lanes:{tender|grant|pitch:{latest, last_done_at}}}；latest 是該籃最新一筆請求或 null
@@ -170,6 +180,10 @@ export function normalizeScanReq(d) {
   if (!SCAN_LANES.includes(r.lane)) return null;
   return Object.assign(normalizeScan(r), { state: str(one.state) });
 }
+
+// opp_archive_list 的精簡列沒有 status、progress_*、folder_status：補成「已結案的進行中卡」再正規化（有 folder_path 就當資料夾已建好）
+export const normalizeArchived = r => normalize(Object.assign({}, r, { status: 'doing', progress_state: 'done', progress_status: 'done', progress_outcome: r.outcome,
+  folder_status: r.folder_status || (r.folder_path ? 'done' : '') }));
 
 // ---------- 真後端（Supabase REST + Realtime） ----------
 function liveAdapter() {
@@ -217,6 +231,11 @@ function liveAdapter() {
     async progress(id) { return card(await rpc(R.progress, { p_id: id })); },
     // 跟肉咖說：itemId 空字串＝不綁案子（p_id 送 null）
     async msgList(itemId, limit) { return msgs(await rpc(R.msgList, { p_id: itemId || null, p_limit: limit || CONFIG.MSG_LIMIT })); },
+    // 結案封存：opp_archive 要 act；opp_unarchive、opp_purge 要 admin；opp_archive_list 回已結案的卡
+    async archive(id, kind, note) { return card(await rpc(R.archive, { p_id: id, p_kind: kind, p_note: note || null })); },
+    async unarchive(id) { return card(await rpc(R.unarchive, { p_id: id })); },
+    async archiveList(q, year, limit) { const d = await rpc(R.archiveList, { p_q: q || null, p_year: year || null, p_limit: limit || 100 }); return (Array.isArray(d) ? d : (d && Array.isArray(d.items) ? d.items : [])).filter(x => x && x.id).map(normalizeArchived); },
+    async purge(id, title) { return await rpc(R.purge, { p_id: id, p_confirm_title: title }); },
     async scanStatus() { return normalizeScans(await rpc(R.scanStatus, {})); },
     async scanRequest(lane) { return normalizeScanReq(await rpc(R.scanRequest, { p_lane: lane })); },
     async msgAdd(itemId, body) { const d = await rpc(R.msgAdd, { p_id: itemId || null, p_body: body }); const one = Array.isArray(d) ? d[0] : d; return one && typeof one === 'object' && one.id != null ? normalizeMsg(one) : null; },

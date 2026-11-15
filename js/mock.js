@@ -15,6 +15,8 @@
 //   sentnodue    恆春示意卡（送件後）的目前步驟沒有期限（看「簡報日期未定」）
 //   sentcustom   恆春示意卡改用自訂步驟鍵、沒有期限（測「seal_submit 已完成」那條判斷）
 //   scanfail     立即掃描一律失敗（看回滾與 toast）
+//   archfail     結案封存一律失敗（看回滾與 toast）
+//   （封存區示意：已有 4 張已結案的卡，今年 3 張、去年 1 張；admin 才能徹底刪除與復原封存）
 //   （立即掃描的三種狀態預設就有：政府標案 40 分鐘前掃過可按、補助徵件掃描中、企劃提案 5 分鐘前剛掃過）
 //   msgnew       開頁 3 秒後肉咖在不綁案子的對話回一則新訊息（看頂列肉咖按鈕的小紅點）
 //   msgfail      跟肉咖說的送出一律失敗（看回滾與 toast）
@@ -30,7 +32,7 @@
 //   realbuild    要做之後照真卡流程：排隊 → 建立中 → 建好（看 3 秒快輪詢與第 1 步自動完成）
 //   folderslow   同 realbuild，但 12 秒後才建好
 //   live         9 秒後進來一張新卡（看新進光暈與 toast）
-import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq } from './adapter.js?v5';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
+import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq, normalizeArchived } from './adapter.js?v6';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
 
 const H = 3600e3, D = 24 * H, MIN = 60e3;
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -202,6 +204,20 @@ function build() {
     st('pitch_present', '評選簡報', 'pending'), st('await_opening', '等待開標', 'pending'), st('result', '決標或結案', 'pending'),
   ];
   rows.push(sent);
+  // ---------- 封存區示意：已結案的卡（sql/25：仍是 doing，progress_state=done、progress_outcome＝結果，結案 14 天後撤下看板） ----------
+  const arch = (o, kind, daysAgo, note) => { const t = now - daysAgo * D;
+    const r = Object.assign(doing(o, o.lane || 'tender', 7, {}), { progress_state: 'done', progress_outcome: kind, progress_archive_at: iso(t + 14 * D), progress_note: note || null, progress_updated_at: iso(t), progress_updated_by: 'operator' });
+    r.progress_steps.forEach(x => { if (kind === 'withdrawn' && x.status !== 'done') { x.status = 'skipped'; delete x.done_at; } else { x.status = 'done'; x.done_at = x.done_at || iso(t); } }); derive(r); return r; };
+  rows.push(
+    arch({ id: 'demo-z1', lane: 'tender', title: '社區營造成果影片（示意）', short_title: '社區營造成果影片', org: '某區公所', amount_label: '預算', amount_display: '30萬', case_no: 'ZQ-115-031（示意）',
+      folder_name: '10-01_社區營造成果影片', folder_path: '/Users/Shared/公司工作區/10-01_社區營造成果影片',
+      links: [{ kind: 'pool', label: '', url: 'https://drive.google.com/drive/folders/DEMO-POOL-Z1' }, { kind: 'review', label: '', url: 'https://drive.google.com/drive/folders/DEMO-REVIEW-Z1' }] }, 'won', 9, '已得標，結案資料都在 Pool。'),
+    arch({ id: 'demo-z2', lane: 'grant', title: '短片創作補助（上半年，示意）', short_title: '短片創作補助', org: '某市影視發展基金會', amount_label: '補助上限', amount_display: '50萬',
+      folder_name: '05-02_短片創作補助', folder_path: '/Users/Shared/公司工作區/05-02_短片創作補助' }, 'lost', 200, '未入選。'),
+    arch({ id: 'demo-z3', lane: 'pitch', title: '咖啡品牌短影音提案（示意）', short_title: '咖啡品牌短影音', org: '某咖啡品牌', amount_label: '報價', amount_display: '40萬',
+      folder_name: '09-20_咖啡品牌短影音', folder_path: '/Users/Shared/公司工作區/09-20_咖啡品牌短影音' }, 'withdrawn', 30, '對方預算砍半，做到一半決定不做。'),
+    arch({ id: 'demo-z4', lane: 'tender', title: '去年度城市形象影片（示意）', short_title: '城市形象影片', org: '某市政府新聞處', amount_label: '預算', amount_display: '180萬', case_no: 'CT-114-007（示意）',
+      folder_name: '2025_城市形象影片', folder_path: '/Users/Shared/公司工作區/2025_城市形象影片' }, 'submitted', 400, null));
   // ?mock=sentcustom：同一張卡改成自訂步驟鍵、沒有內部期限，只能靠「seal_submit 已完成」判斷是已送件
   if (qflag.includes('sentcustom')) sent.progress_steps[5] = st('wait_agency', '等機關通知', 'current', { owner: '機關' });
   rows.filter(r => r.status === 'doing').forEach(r => {
@@ -288,9 +304,9 @@ export function mockAdapter(modeStr) {
   let msgN = 0;
   // ---------- 立即掃描：三種狀態示意 ----------
   const scanSt = {
-    tender: { lane: 'tender', status: 'done', result: '新增 2 張、重複 5 張', created_at: tAgo(42), done_at: tAgo(40), last_done_at: tAgo(40) },
-    grant: { lane: 'grant', status: 'running', result: null, created_at: tAgo(1), done_at: null, last_done_at: tAgo(180) },
-    pitch: { lane: 'pitch', status: 'done', result: '新增 0 張、重複 4 張', created_at: tAgo(6), done_at: tAgo(5), last_done_at: tAgo(5) },
+    tender: { lane: 'tender', status: 'done', result: '新增 2 件、重複 5 件（AI 判讀：推薦 4、可視人力加投 1、不推薦 12）', created_at: tAgo(42), done_at: tAgo(40), last_done_at: tAgo(40) },
+    grant: { lane: 'grant', status: 'running', phase: 'judging', result: null, created_at: tAgo(1), done_at: null, last_done_at: tAgo(180) },
+    pitch: { lane: 'pitch', status: 'done', result: '新增 0 件、重複 4 件（AI 判讀：推薦 0、可視人力加投 0、不推薦 9）', created_at: tAgo(6), done_at: tAgo(5), last_done_at: tAgo(5) },
   };
   // 補助徵件那筆「掃描中」：開頁 9 秒後掃完、新增 1 張卡
   const finishScan = (lane, n) => {
@@ -299,7 +315,7 @@ export function mockAdapter(modeStr) {
       const src = rows.find(r => r.lane === lane && r.status === 'new') || rows.find(r => r.status === 'new');
       if (src) { const c = Object.assign(JSON.parse(JSON.stringify(src)), { id: 'scan-' + lane + '-' + (++nextN), title: '掃描新進：' + ({ tender: '宣傳影片標案', grant: '影像補助', pitch: '品牌合作' }[lane]) + '（示意）', short_title: null, created_at: iso(Date.now()), status: 'new', crawl_status: 'none', full_text: '' }); rows.unshift(c); }
     }
-    Object.assign(st, { status: 'done', result: '新增 ' + n + ' 張、重複 3 張', done_at: iso(Date.now()), last_done_at: iso(Date.now()) }); ping();
+    Object.assign(st, { status: 'done', phase: null, result: '新增 ' + n + ' 件、重複 3 件（AI 判讀：推薦 ' + (n + 2) + '、可視人力加投 1、不推薦 15）', done_at: iso(Date.now()), last_done_at: iso(Date.now()) }); ping();
   };
   if (!flags.has('empty')) setTimeout(() => finishScan('grant', 1), 9000);
   if (flags.has('msgnew')) setTimeout(() => { msgs.push({ id: 'mnew', item_id: null, author: RK, body: '補充：截止日表已更新，新增一筆補助。（示意）', reply_to: 'm1', status: 'done', handled_by: RK, created_at: iso(Date.now()) }); ping(); }, 3000);
@@ -402,6 +418,54 @@ export function mockAdapter(modeStr) {
       }
       return normalize(card(r));
     },
+    async archive(id, kind, note) {
+      await wait(400); needAct();
+      if (flags.has('archfail')) throw new AdapterError('server', '伺服器沒有回應');
+      const r = find(id);
+      if (!['won', 'lost', 'submitted', 'withdrawn'].includes(kind)) throw new AdapterError('state', 'kind must be won, lost, submitted or withdrawn', 400);
+      if (r.status !== 'doing') throw new AdapterError('state', 'card is not in progress', 400);
+      const re = r.progress_state === 'done', full = () => normalize(Object.assign(card(r), { progress_steps: r.progress_steps }));
+      if (re && r.progress_outcome === kind && note == null) return full();
+      if (!re) {
+        r.progress_steps.forEach(x => { if (x.status === 'done' || x.status === 'skipped') return; if (kind === 'withdrawn') { x.status = 'skipped'; delete x.done_at; } else { x.status = 'done'; x.done_at = iso(Date.now()); } });
+        r.progress_archive_at = r.progress_archive_at || iso(Date.now() + 14 * D);
+      }
+      Object.assign(r, { progress_state: 'done', progress_outcome: kind, progress_note: (note && note.trim()) || r.progress_note, progress_updated_at: iso(Date.now()), progress_updated_by: flags.has('admin') ? 'admin' : 'operator' });
+      derive(r); ping();
+      return full();
+    },
+    async unarchive(id) {
+      await wait(400);
+      if (!flags.has('admin')) throw new AdapterError('perm', 'only an admin key can unarchive', 403);
+      const r = find(id);
+      if (r.progress_state === 'done' || r.progress_state === 'failed') {
+        const st = r.progress_steps; if (st.length && !st.some(x => x.status === 'current' || x.status === 'blocked')) st[st.length - 1].status = 'current';
+        Object.assign(r, { progress_state: 'active', progress_archive_at: null, progress_updated_at: iso(Date.now()) }); derive(r); ping();
+      }
+      return normalize(Object.assign(card(r), { progress_steps: r.progress_steps }));
+    },
+    async archiveList(q, year, limit) {
+      await wait(200);
+      const t = String(q || '').trim().toLowerCase(), y = year ? Number(year) : null;
+      const closedAt = r => (Date.parse(r.progress_archive_at) || Date.parse(r.progress_updated_at) + 14 * D) - 14 * D;
+      // 照 opp_archive_list 的精簡列回（沒有 status、progress_*、folder_status）；is_demo 只有示範用
+      return rows.filter(r => r.status === 'doing' && r.progress_state === 'done')
+        .filter(r => !t || [r.title, r.short_title, r.org, r.case_no].some(v => String(v || '').toLowerCase().includes(t)))
+        .filter(r => !y || new Date(closedAt(r) + 8 * H).getUTCFullYear() === y)
+        .sort((a, b) => closedAt(b) - closedAt(a)).slice(0, limit || 100)
+        .map(r => normalizeArchived({ id: r.id, title: r.title, short_title: r.short_title, org: r.org, case_no: r.case_no, lane: r.lane, basket: r.basket, outcome: r.progress_outcome,
+          closed_at: iso(closedAt(r)), links: r.links || [], folder_path: r.folder_path, folder_name: r.folder_name, source_url: r.source_url, amount_display: r.amount_display,
+          deadline_text: r.deadline_text, progress_note: r.progress_note, is_demo: r.is_demo }));
+    },
+    async purge(id, title) {
+      await wait(400);
+      if (!flags.has('admin')) throw new AdapterError('perm', 'only an admin key can purge', 403);
+      const r = find(id);
+      const t = String(title || '').trim();
+      if (!t || (t !== String(r.short_title || '').trim() && t !== String(r.title || '').trim())) throw new AdapterError('state', 'confirm title does not match the card title', 400);
+      rows = rows.filter(x => x.id !== id); ping();
+      return { purged: true, id, title: r.title, by: 'admin', note: '只刪資料庫，電腦與 Drive 的檔案沒動' };
+    },
     async scanStatus() { await wait(100); if (flags.has('offline')) throw new AdapterError('network', '連不上伺服器'); return normalizeScans({ server_time: iso(Date.now()), lanes: Object.fromEntries(Object.entries(scanSt).map(([l, x]) => [l, { latest: x.status ? Object.assign({}, x, { last_done_at: undefined }) : null, last_done_at: x.last_done_at || null }])) }); },
     async scanRequest(lane) {
       await wait(400); needAct();
@@ -411,9 +475,12 @@ export function mockAdapter(modeStr) {
       const req = () => Object.assign({}, st, { last_done_at: undefined });
       if (st.status === 'queued' || st.status === 'running') return normalizeScanReq({ state: 'already', request: req() });
       if (st.status === 'done' && st.done_at && Date.now() - Date.parse(st.done_at) < 15 * 60e3) return normalizeScanReq({ state: 'recent', request: req() });
-      Object.assign(st, { status: 'queued', result: null, created_at: iso(Date.now()), done_at: null });
-      setTimeout(() => { st.status = 'running'; ping(); }, 1500);
-      setTimeout(() => finishScan(lane, 2), 7000);
+      Object.assign(st, { status: 'queued', phase: null, result: null, created_at: iso(Date.now()), done_at: null });
+      setTimeout(() => { Object.assign(st, { status: 'running', phase: 'scanning' }); ping(); }, 1500);   // 示意把 2～5 分鐘壓成幾秒
+      setTimeout(() => { st.phase = 'judging'; ping(); }, 3500);
+      setTimeout(() => { st.phase = 'sending'; ping(); }, 5500);
+      if (flags.has('scanfailed')) setTimeout(() => { Object.assign(st, { status: 'failed', phase: null, result: 'AI 判讀逾時（示意）', done_at: iso(Date.now()) }); ping(); }, 6500);
+      else setTimeout(() => finishScan(lane, 2), 7000);
       return normalizeScanReq({ state: 'queued', request: req() });
     },
     async msgList(itemId, limit) {
