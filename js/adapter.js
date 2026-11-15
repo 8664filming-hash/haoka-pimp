@@ -11,6 +11,8 @@
 //   await api.get(id)             → 單張卡，含 detailText 與 progressSteps（opp_get）
 //   await api.progress(id)        → 單張卡，含 progressSteps，不含全文（opp_progress）
 //   await api.act(id, action, o)  → 更新後的卡。action：dive｜stash｜unstash｜deleted｜skipped｜restore｜build
+//   await api.msgList(itemId, n) → 跟肉咖說的訊息（新到舊）；await api.msgAdd(itemId, body) → 新訊息或 null
+//   await api.scanStatus() → 三籃掃描狀態；await api.scanRequest(lane) → 該籃的新狀態或 null
 //   api.subscribe(onPing, onState)→ 取消函式；onPing() 代表「有變動，請重抓」，onState(bool) 代表即時連線狀態
 //   網頁端沒有任何寫入進度的呼叫：進度只由企劃流程用 planner 金鑰回寫。
 // =====================================================================
@@ -27,7 +29,10 @@ export const CONFIG = {
   SLOW_MS: 3000,           // 超過這麼久還沒回來，就顯示「載入比較久」
   GONE_HOURS: 72,
   RPC: { whoami: 'opp_whoami', list: 'opp_list', get: 'opp_get', progress: 'opp_progress', topic: 'get_opp_realtime_topic',
-         dive: 'opp_dive', stash: 'opp_stash', unstash: 'opp_unstash', drop: 'opp_drop', restore: 'opp_restore', build: 'opp_build' },
+         dive: 'opp_dive', stash: 'opp_stash', unstash: 'opp_unstash', drop: 'opp_drop', restore: 'opp_restore', build: 'opp_build',
+         msgAdd: 'opp_msg_add', msgList: 'opp_msg_list',   // 跟肉咖說（sql/24，C 做）
+         scanRequest: 'opp_scan_request', scanStatus: 'opp_scan_status' },   // 立即掃描（C 做）
+  MSG_LIMIT: 50,
 };
 
 // 後端回來的英文名字或程式名 → 畫面上的顯示名。沒列到的照原字顯示。
@@ -72,7 +77,7 @@ export async function createAdapter() {
   const configured = CONFIG.SUPABASE_URL.startsWith('http') && !CONFIG.SUPABASE_URL.includes('YOUR-PROJECT-REF') && !CONFIG.SUPABASE_ANON_KEY.startsWith('YOUR-');
   if (!configured) console.info('[好咖皮條客] adapter.js 的 SUPABASE_URL / SUPABASE_ANON_KEY 還是待填佔位，目前顯示示範資料');
   if (hasKey() && !forceMock && configured) return liveAdapter();
-  const { mockAdapter } = await import('./mock.js?v4');   // ?v 跟 sw.js 的 CACHE 一起換
+  const { mockAdapter } = await import('./mock.js?v5');   // ?v 跟 sw.js 的 CACHE 一起換
   return mockAdapter(forceMock ? mockFlag : '');
 }
 
@@ -131,6 +136,41 @@ export function normalize(r) {
   };
 }
 
+// ---------- 跟肉咖說：訊息（opp_msg_list 回傳 {id, item_id, author, body, reply_to, status, handled_by, created_at}，新到舊） ----------
+export const RK = '肉咖';   // 肉咖回覆的 author
+export function normalizeMsg(m) {
+  return { id: str(m.id), itemId: m.item_id == null ? '' : str(m.item_id), author: str(m.author), body: str(m.body),
+    replyTo: m.reply_to == null ? '' : str(m.reply_to), status: str(m.status), handledBy: str(m.handled_by), createdAt: ts(m.created_at) };
+}
+const msgs = d => (Array.isArray(d) ? d : (d && Array.isArray(d.items) ? d.items : [])).filter(x => x && typeof x === 'object' && x.id != null).map(normalizeMsg);
+
+// ---------- 立即掃描：opp_scan_status 回三籃最新狀態 {lane, status, result, created_at, done_at, last_done_at} ----------
+export const SCAN_LANES = ['tender', 'grant', 'pitch'];
+function scanAdded(r) {   // result 可能是數字、{added|new|count}、或文字；抓得到數字才回
+  if (typeof r === 'number') return r;
+  if (r && typeof r === 'object') for (const k of ['added', 'new', 'new_count', 'count', 'inserted']) if (Number.isFinite(Number(r[k]))) return Number(r[k]);
+  const m = String(r == null ? '' : r).match(/\d+/); return m ? Number(m[0]) : null;
+}
+export function normalizeScan(x) {
+  return { lane: str(x.lane), status: str(x.status), added: scanAdded(x.result), resultText: typeof x.result === 'string' ? x.result : '',
+    createdAt: ts(x.created_at), doneAt: ts(x.done_at), lastDoneAt: ts(x.last_done_at) };
+}
+// sql/26：opp_scan_status 回 {server_time, lanes:{tender|grant|pitch:{latest, last_done_at}}}；latest 是該籃最新一筆請求或 null
+export const normalizeScans = d => {
+  const lanes = d && typeof d === 'object' && !Array.isArray(d) && d.lanes && typeof d.lanes === 'object' ? d.lanes : null;
+  const a = lanes ? SCAN_LANES.map(l => { const v = lanes[l]; if (!v || typeof v !== 'object') return null; const lt = v.latest && typeof v.latest === 'object' ? v.latest : {}; return Object.assign({}, lt, { lane: l, last_done_at: v.last_done_at }); })
+    : Array.isArray(d) ? d : (d && Array.isArray(d.items) ? d.items : (d && typeof d === 'object' ? Object.values(d) : []));
+  return a.filter(x => x && typeof x === 'object' && SCAN_LANES.includes(x.lane)).map(normalizeScan);
+};
+// sql/26：opp_scan_request 回 {state:'queued'|'already'|'recent', request:{id, lane, status, result, created_at, started_at, done_at}}
+export function normalizeScanReq(d) {
+  const one = Array.isArray(d) ? d[0] : d;
+  if (!one || typeof one !== 'object') return null;
+  const r = one.request && typeof one.request === 'object' ? one.request : one;
+  if (!SCAN_LANES.includes(r.lane)) return null;
+  return Object.assign(normalizeScan(r), { state: str(one.state) });
+}
+
 // ---------- 真後端（Supabase REST + Realtime） ----------
 function liveAdapter() {
   const base = CONFIG.SUPABASE_URL.replace(/\/+$/, '');
@@ -175,6 +215,11 @@ function liveAdapter() {
     },
     async get(id) { return card(await rpc(R.get, { p_id: id })); },
     async progress(id) { return card(await rpc(R.progress, { p_id: id })); },
+    // 跟肉咖說：itemId 空字串＝不綁案子（p_id 送 null）
+    async msgList(itemId, limit) { return msgs(await rpc(R.msgList, { p_id: itemId || null, p_limit: limit || CONFIG.MSG_LIMIT })); },
+    async scanStatus() { return normalizeScans(await rpc(R.scanStatus, {})); },
+    async scanRequest(lane) { return normalizeScanReq(await rpc(R.scanRequest, { p_lane: lane })); },
+    async msgAdd(itemId, body) { const d = await rpc(R.msgAdd, { p_id: itemId || null, p_body: body }); const one = Array.isArray(d) ? d[0] : d; return one && typeof one === 'object' && one.id != null ? normalizeMsg(one) : null; },
     async act(id, action, o = {}) {
       switch (action) {
         case 'dive': return card(await rpc(R.dive, { p_id: id, ...(o.force ? { p_force: true } : {}) }));

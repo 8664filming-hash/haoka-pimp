@@ -1,6 +1,6 @@
 // 好咖皮條客主程式：狀態、畫面、事件。只透過 adapter.js 取得與寫入資料。版面規格見交接包 DESIGN.md。
-import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl } from './adapter.js?v4';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
-import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v4';
+import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl, RK, SCAN_LANES } from './adapter.js?v5';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
+import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v5';
 
 const $ = s => document.querySelector(s);
 const LANES = [
@@ -94,7 +94,9 @@ const S = {
   sheet: false, drawer: null,   // drawer = {id, view:'preview'|'full'|'progress'}
   detail: new Map(),   // id → {busy, timedOut, t0}
   prog: new Map(),     // id → {busy, at}：進度步驟抓過的版本（progressUpdatedAt）
-  textOpen: new Set(), attOpen: new Set(), fresh: new Set(),   // attOpen：附件清單展開中的卡（重畫時保留）
+  textOpen: new Set(), attOpen: new Set(), fresh: new Set(),
+  scan: {}, scanBusy: new Set(),   // 立即掃描：三籃最新狀態
+  msgs: new Map(), msgBusy: new Set(), pend: new Map(), draft: new Map(),   // 跟肉咖說：key＝卡片 id（不綁案子是 ''）   // attOpen：附件清單展開中的卡（重畫時保留）
 };
 let api, lastFocus = null, depth = 0, ignorePop = false;
 const locks = new Set(), mutDone = {};
@@ -358,7 +360,7 @@ function renderBoard() {
       ? '<div class="zero">' + IC.inbox + '<b>目前沒有進行中的案子</b><span>在完整內容按「要做」之後，進度會出現在這一籃。</span></div>'
       : '<div class="zero">' + IC.inbox + '<b>這一籃目前是空的</b><span>' + TBD.laneEmpty + '</span></div>';
     const body = loadingEmpty ? skel() + skel() + skel() : list.length ? list.map(b.k === 'active' ? acard : card).join('') : zero;
-    return '<section class="lane b-' + b.k + (S.tab === b.k ? ' cur' : '') + '" data-l="' + b.k + '"><div class="lh"><h2><i class="ld"></i>' + b.n + (loadingEmpty ? '' : '<em>' + list.length + '</em>') + '</h2><p>' + b.d + '</p></div><div class="lbody">' + body + '</div></section>';
+    return '<section class="lane b-' + b.k + (S.tab === b.k ? ' cur' : '') + '" data-l="' + b.k + '"><div class="lh"><h2><i class="ld"></i>' + b.n + (loadingEmpty ? '' : '<em>' + list.length + '</em>') + '</h2><div class="lh-row"><p>' + b.d + '</p>' + scanBox(b.k) + '</div></div><div class="lbody">' + body + '</div></section>';
   }).join('');
   lanes.querySelectorAll('.lane').forEach(l => { const b = l.querySelector('.lbody'); if (keep[l.dataset.l]) b.scrollTop = keep[l.dataset.l]; });
   lanes.scrollLeft = left;
@@ -420,6 +422,7 @@ function renderSheet() {
 
 // ---------------- 畫面：詳細資料抽屜 ----------------
 function viewOf() {
+  if (S.drawer && S.drawer.view === 'chat') return 'chat';
   const it = S.drawer && get(S.drawer.id); if (!it) return null;
   return it.status === 'doing' ? 'progress' : S.drawer.view;
 }
@@ -508,7 +511,7 @@ function fullHTML(it) {
   return '<div class="dt">' + head(it) + statBlock(it) +
     (it.why || it.fit ? '<div>' + (it.why ? '<p class="dt-why sbp">' + softBreak(it.why) + '</p>' : '') + (it.fit ? '<p class="dt-fit">契合度 <b>' + esc(it.fit) + '</b></p>' : '') + '</div>' : '') +
     structBox(it, false) + warnBox(it.warn) + crawlHTML(it) + firstBox(it) + factsBox(it) +
-    '<section class="dt-sec dt-src"><h3>來源</h3>' + metaLine(it) + link(it) + '</section></div>';
+    '<section class="dt-sec dt-src"><h3>來源</h3>' + metaLine(it) + link(it) + '</section>' + chatHTML(it.id) + '</div>';
 }
 
 // ----- 進度大區塊（進行中的進度抽屜；網頁端只讀，沒有任何寫入進度的按鈕） -----
@@ -580,12 +583,15 @@ function progressHTML(it) {
     '<p class="dt-line">' + esc(amtText(it)) + (dl ? ' · ' + dl : '') + left + '</p>' +
     progressBox(it) + structBox(it, false) +
     (it.why ? '<p class="dt-why sbp">' + softBreak(it.why) + '</p>' : '') + warnBox(it.warn) + crawlHTML(it) + factsBox(it) +
-    '<section class="dt-sec dt-src"><h3>來源</h3>' + metaLine(it) + link(it) + '</section></div>';
+    '<section class="dt-sec dt-src"><h3>來源</h3>' + metaLine(it) + link(it) + '</section>' + chatHTML(it.id) + '</div>';
 }
 
 function renderDrawer() {
-  const dr = $('#drawer'), it = S.drawer && get(S.drawer.id), view = viewOf();
+  const dr = $('#drawer');
+  if (S.drawer && S.drawer.view === 'chat') return renderChatDrawer(dr);
+  const it = S.drawer && get(S.drawer.id), view = viewOf();
   if (!it || !view) { dr.classList.remove('show'); return; }
+  const keep = chatFocus();
   const sc = dr.querySelector('.db') && dr.dataset.key === it.id + view ? dr.querySelector('.db').scrollTop : 0;
   const id = esc(it.id); let label, body, foot = '';
   if (view === 'progress') {
@@ -614,11 +620,14 @@ function renderDrawer() {
   dr.dataset.key = it.id + view;
   dr.querySelector('.db').scrollTop = sc;
   dr.classList.add('show');
+  chatRestore(keep);
+  if (view === 'full' || view === 'progress') markSeen(it.id);
 }
 
 function renderAll() {
   renderLive(); renderNotice(); renderSummary(); renderBoard(); renderSheet();
-  if (S.drawer) { if (!get(S.drawer.id)) closeDrawer(true); else renderDrawer(); }
+  if (S.drawer) { if (S.drawer.view !== 'chat' && !get(S.drawer.id)) closeDrawer(true); else renderDrawer(); }
+  renderRk();
   syncOverlay();
 }
 
@@ -639,6 +648,7 @@ function openDrawer(id, view) {
   S.drawer = { id, view: view || 'preview' };
   if (it.status === 'doing') ensureProgress(id);
   else if (view === 'full') ensureDetail(id);
+  if (it.status === 'doing' || view === 'full') ensureMsgs(id);
   renderDrawer(); syncOverlay();
   const dr = $('#drawer'); if (!dr.contains(document.activeElement)) dr.querySelector('.xb')?.focus({ preventScroll: true });
 }
@@ -800,6 +810,204 @@ async function ensureProgress(id, force) {
 }
 
 
+// ---------------- 跟肉咖說（v5；後端 opp_msg_add／opp_msg_list，sql/24） ----------------
+// 對話 key：卡片 id；不綁案子的對話是 ''（p_id 送 null）。
+// opp_msg_list(p_id 空) 不論回「全部」或「只回不綁案子的」，前端都只把不綁案子的放進總對話，其餘拿來算頂列紅點。
+const MSG_NOTE = '肉咖會處理或轉給負責的視窗；花錢、刪檔、付款要 Borry 本人同意。';
+const MSG_ST = { sending: '傳送中', new: '已送出', picked: '肉咖收到了', received: '肉咖收到了', seen: '肉咖收到了', handling: '肉咖收到了', in_progress: '肉咖收到了', done: '處理完', handled: '處理完' };
+const MSG_MAX = 1000;
+let tmpN = 0;
+const SEEN_KEY = () => 'copp.msgseen.v1:' + (api && api.mode === 'mock' ? 'mock:' + (qs.get('mock') || '') : keyTag());
+function seenStore() {
+  let o = null; try { o = JSON.parse(localStorage.getItem(SEEN_KEY()) || 'null'); } catch (e) {}
+  if (!o || typeof o !== 'object') { o = { base: tnow(), keys: {} }; try { localStorage.setItem(SEEN_KEY(), JSON.stringify(o)); } catch (e) {} }   // 第一次開：之前的舊回覆不算新的
+  return o;
+}
+function markSeen(key) {
+  const o = seenStore(), all = msgsAll().filter(m => m.author === RK && (m.itemId || '') === key);
+  const t = Math.max(tnow(), ...all.map(m => m.createdAt || 0));
+  if ((o.keys[key] || 0) >= t) return;
+  o.keys[key] = t; try { localStorage.setItem(SEEN_KEY(), JSON.stringify(o)); } catch (e) {}
+  renderRk();
+}
+const msgsAll = () => { const seen = new Set(), out = []; S.msgs.forEach(v => v.list.forEach(m => { if (!seen.has(m.id)) { seen.add(m.id); out.push(m); } })); return out; };
+function unreadReplies() {
+  const o = seenStore();
+  return msgsAll().filter(m => m.author === RK && m.createdAt && m.createdAt > Math.max(o.base || 0, o.keys[m.itemId || ''] || 0));
+}
+function renderRk() {
+  const b = $('#rkbtn'); if (!b) return;
+  const n = unreadReplies().length;
+  b.hidden = S.net === 'auth';
+  b.innerHTML = '<span>肉咖</span>' + (n ? '<i class="rk-dot" aria-hidden="true"></i>' : '');
+  b.setAttribute('aria-label', '跟肉咖說' + (n ? '，有 ' + n + ' 則新回覆' : ''));
+}
+async function ensureMsgs(key, force) {
+  if (!api || !api.msgList || S.net === 'auth' || S.msgBusy.has(key)) return;
+  S.msgBusy.add(key);
+  try {
+    const list = await api.msgList(key, CONFIG.MSG_LIMIT);
+    const old = S.msgs.get(key);
+    const same = old && JSON.stringify(old.list) === JSON.stringify(list);
+    S.msgs.set(key, { list, at: tnow() });
+    if (!same || !old) { if (chatOpenFor(key)) renderDrawer(); renderRk(); }
+  } catch (e) {
+    if (e instanceof AdapterError && e.kind === 'auth') { setAuth(); renderAll(); }
+    else if (!S.msgs.has(key)) { S.msgs.set(key, { list: [], at: tnow(), err: true }); if (chatOpenFor(key)) renderDrawer(); }
+  } finally { S.msgBusy.delete(key); }
+}
+function loadMsgs() {
+  ensureMsgs('');
+  if (S.drawer && S.drawer.view !== 'chat' && get(S.drawer.id) && (viewOf() === 'full' || viewOf() === 'progress')) ensureMsgs(S.drawer.id);
+}
+const chatOpenFor = key => !!S.drawer && (S.drawer.view === 'chat' ? key === '' : S.drawer.id === key && (viewOf() === 'full' || viewOf() === 'progress'));
+function threadOf(key) {
+  const st = S.msgs.get(key);
+  const list = st ? st.list.filter(m => (m.itemId || '') === key) : null;
+  const pend = S.pend.get(key) || [];
+  return list ? list.slice().sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).concat(pend) : null;   // 舊的在上
+}
+function msgLi(m, all) {
+  const rk = m.author === RK;
+  const st = m.pending ? MSG_ST.sending : rk ? '' : (MSG_ST[m.status] || '');
+  const orig = rk && m.replyTo ? all.find(x => x.id === m.replyTo) : null;
+  return '<li class="msg ' + (rk ? 'rk' : 'me') + (m.pending ? ' pending' : '') + '">' +
+    '<p class="msg-h"><b>' + esc(m.author || '不明') + '</b>' + (m.createdAt ? ' · <span data-rel="' + m.createdAt + '">' + relTime(m.createdAt, tnow()) + '</span>' : '') + '</p>' +
+    (orig ? '<p class="msg-q">回覆「' + esc(orig.body.length > 24 ? orig.body.slice(0, 24) + '…' : orig.body) + '」</p>' : '') +
+    '<div class="msg-b">' + para(m.body) + '</div>' + (st ? '<p class="msg-st">' + st + '</p>' : '') + '</li>';
+}
+function chatHTML(key) {
+  const th = threadOf(key), all = th || [];
+  const list = !th ? '<p class="chat-empty">讀取對話中…</p>'
+    : th.length ? '<ol class="msgs">' + th.map(m => msgLi(m, all)).join('') + '</ol>'
+    : '<p class="chat-empty">' + (S.msgs.get(key) && S.msgs.get(key).err ? '對話讀不到，等一下會自動再試。' : '還沒有對話。有事直接跟肉咖說。') + '</p>';
+  const k = esc(key), d = S.draft.get(key) || '';
+  const box = can('act')
+    ? '<div class="chat-in"><p class="chat-note">' + MSG_NOTE + '</p>' +
+      '<textarea id="chat-input" data-key="' + k + '" maxlength="' + MSG_MAX + '" rows="2" placeholder="想請肉咖做什麼？" aria-label="寫給肉咖的訊息">' + esc(d) + '</textarea>' +
+      '<div class="chat-acts"><span class="chat-cnt" id="chat-cnt">' + d.length + '／' + MSG_MAX + '</span><button class="btn btn-primary" data-act="msg-send" data-key="' + k + '" type="button">送出</button></div></div>'
+    : '<p class="chat-ro">你的金鑰只能看對話，不能發言。</p>';
+  return '<section class="dt-sec chat" aria-label="跟肉咖說"><h3>跟肉咖說</h3>' + list + box + '</section>';
+}
+// 不綁案子的總對話抽屜
+function openChat() {
+  if (!S.drawer) lastFocus = document.activeElement;
+  S.drawer = { id: '__chat', view: 'chat' };
+  ensureMsgs('');
+  renderDrawer(); syncOverlay();
+  ($('#chat-input') || $('#drawer .xb'))?.focus({ preventScroll: true });
+}
+function renderChatDrawer(dr) {
+  const keep = chatFocus();
+  const sc = dr.querySelector('.db') && dr.dataset.key === '__chat' ? dr.querySelector('.db').scrollTop : 0;
+  // 案子裡的新回覆（總對話只放不綁案子的，案子裡的回覆列出來，點了打開那張卡）
+  const o = seenStore(), other = {};
+  unreadReplies().filter(m => m.itemId && get(m.itemId)).forEach(m => { other[m.itemId] = (other[m.itemId] || 0) + 1; });
+  const oth = Object.keys(other).length ? '<section class="dt-sec chat-other"><h3>案子裡的新回覆</h3>' + Object.keys(other).map(id => { const it = get(id);
+      return '<button class="btn btn-ghost" data-act="' + (it.status === 'doing' ? 'open-progress' : 'dive') + '" data-id="' + esc(id) + '" type="button">' + esc(nm(it)) + '（' + other[id] + '）</button>'; }).join('') + '</section>' : '';
+  dr.innerHTML = '<div class="dh"><span>跟肉咖說</span><button class="xb" data-act="close-drawer" type="button" aria-label="關閉">×</button></div><div class="db"><div class="dt">' + oth + chatHTML('') + '</div></div>' +
+    '<div class="df"><button class="btn btn-ghost" data-act="close-drawer" type="button">回到面板</button></div>';
+  dr.setAttribute('aria-label', '跟肉咖說');
+  dr.dataset.key = '__chat';
+  const db = dr.querySelector('.db'); db.scrollTop = sc || db.scrollHeight;   // 第一次打開捲到最新
+  dr.classList.add('show');
+  chatRestore(keep);
+  markSeen('');
+}
+// 重畫抽屜時保留輸入框的焦點與游標（草稿內容存在 S.draft）
+function chatFocus() { const a = document.activeElement; return a && a.id === 'chat-input' ? [a.selectionStart, a.selectionEnd] : null; }
+function chatRestore(k) { if (!k) return; const t = $('#chat-input'); if (t) { t.focus({ preventScroll: true }); try { t.setSelectionRange(k[0], k[1]); } catch (e) {} } }
+async function msgSend(key) {
+  const text = (S.draft.get(key) || '').trim();
+  if (!text) { $('#chat-input')?.focus(); return; }
+  if (text.length > MSG_MAX) { toast('訊息太長，最多 ' + MSG_MAX + ' 字', { bad: true }); return; }
+  if (!can('act')) { toast(reason(new AdapterError('perm', '')), { bad: true }); return; }
+  const tmp = { id: 'tmp' + (++tmpN), itemId: key, author: (S.who && S.who.role) || '我', body: text, status: 'sending', createdAt: tnow(), pending: true };
+  S.pend.set(key, (S.pend.get(key) || []).concat(tmp));
+  S.draft.set(key, '');
+  renderDrawer();
+  try {
+    await api.msgAdd(key, text);
+    S.pend.set(key, (S.pend.get(key) || []).filter(m => m !== tmp));
+    await ensureMsgs(key, true);
+    if (key) ensureMsgs('');
+    renderDrawer();
+  } catch (e) {
+    S.pend.set(key, (S.pend.get(key) || []).filter(m => m !== tmp));   // 回滾：拿掉「傳送中」，文字放回輸入框
+    if (!S.draft.get(key)) S.draft.set(key, text);
+    if (e instanceof AdapterError && e.kind === 'auth') setAuth();
+    if (e instanceof AdapterError && e.kind === 'perm') loadWho();
+    toast('沒有送出，已經放回輸入框：' + reason(e), { bad: true });
+    renderAll();
+  }
+}
+document.addEventListener('input', e => {
+  if (e.target.id !== 'chat-input') return;
+  S.draft.set(e.target.dataset.key || '', e.target.value);
+  const c = $('#chat-cnt'); if (c) c.textContent = e.target.value.length + '／' + MSG_MAX;
+});
+document.addEventListener('keydown', e => {   // Ctrl／⌘＋Enter 送出
+  if (e.target.id === 'chat-input' && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); msgSend(e.target.dataset.key || ''); }
+});
+
+// ---------------- 立即掃描（v5；後端 opp_scan_request／opp_scan_status） ----------------
+// 政府標案、補助徵件、企劃提案三籃欄頭各一顆。排隊或掃描中轉圈；15 分鐘內掃過按鈕寫「剛掃過」並灰掉；viewer 只看得到上次掃描時間。
+const SCAN_COOL = 15 * 60e3;
+const scanning = k => { const x = S.scan[k]; return !!x && (x.status === 'queued' || x.status === 'running'); };
+const hm = ms => { const d = new Date(ms + 8 * H); return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0'); };
+const lastScan = x => x && (x.lastDoneAt || (x.status === 'done' ? x.doneAt : null));
+function scanBox(k) {
+  if (!SCAN_LANES.includes(k)) return '';
+  const x = S.scan[k], last = lastScan(x), now = tnow();
+  const lastTxt = last ? '上次掃描 ' + (now - last < D ? hm(last) : fmtDate(last)) : '';
+  let st = '';
+  if (scanning(k)) st = '<span class="spin" aria-hidden="true"></span>掃描中，約 1～5 分鐘';
+  else if (x && x.status === 'done' && x.doneAt && now - x.doneAt < SCAN_COOL) st = '剛掃完：' + (x.added == null ? '完成' : '新增 ' + x.added + ' 張') + (lastTxt ? ' · ' + lastTxt : '');
+  else if (x && x.status === 'failed') st = '上次掃描沒有成功' + (lastTxt ? ' · ' + lastTxt : '');
+  else st = lastTxt;
+  const cool = last && now - last < SCAN_COOL;
+  const btn = !can('act') ? ''
+    : scanning(k) ? '<button class="scan-btn" type="button" disabled aria-disabled="true">掃描中</button>'
+    : cool ? '<button class="scan-btn" type="button" disabled aria-disabled="true" title="15 分鐘內掃過，晚點再掃">剛掃過</button>'
+    : '<button class="scan-btn" data-act="scan" data-lane="' + k + '" type="button" aria-label="立即掃描' + LN[k] + '">立即掃描</button>';
+  return '<div class="scan" data-scan="' + k + '" aria-live="polite">' + btn + (st ? '<span class="scan-st">' + st + '</span>' : '') + '</div>';
+}
+function renderScan() { document.querySelectorAll('.scan[data-scan]').forEach(el => { const k = el.dataset.scan; el.outerHTML = scanBox(k); }); }
+async function loadScan() {
+  if (!api || !api.scanStatus || S.net === 'auth' || S.scanBusy.has('*')) return;
+  S.scanBusy.add('*');
+  try {
+    const list = await api.scanStatus(), was = {};
+    SCAN_LANES.forEach(k => { was[k] = scanning(k); });
+    const before = JSON.stringify(S.scan);
+    list.forEach(x => { if (!S.scanBusy.has(x.lane)) S.scan[x.lane] = x; });
+    if (JSON.stringify(S.scan) !== before) renderScan();
+    if (SCAN_LANES.some(k => was[k] && !scanning(k))) ping();   // 剛掃完：馬上重抓列表，新卡才會出現
+    if (SCAN_LANES.some(scanning)) kickPoll();
+  } catch (e) {
+    if (e instanceof AdapterError && e.kind === 'auth') { setAuth(); renderAll(); }
+  } finally { S.scanBusy.delete('*'); }
+}
+async function scanNow(k) {
+  if (!SCAN_LANES.includes(k) || scanning(k) || S.scanBusy.has(k)) return;
+  if (!can('act')) { toast(reason(new AdapterError('perm', '')), { bad: true }); return; }
+  const prev = S.scan[k];
+  S.scanBusy.add(k);
+  S.scan[k] = Object.assign({}, prev || { lane: k }, { status: 'queued', createdAt: tnow(), doneAt: null, added: null });   // 樂觀：先轉圈
+  renderScan(); kickPoll();
+  try {
+    const res = await api.scanRequest(k);
+    if (res) S.scan[k] = Object.assign({}, res, { lastDoneAt: res.lastDoneAt || (prev && prev.lastDoneAt) || null });   // 請求那筆不帶 last_done_at，沿用上次的
+    toast(res && res.state === 'already' ? '「' + LN[k] + '」已經在掃描了，約 1～5 分鐘'
+      : res && res.state === 'recent' ? '「' + LN[k] + '」15 分鐘內剛掃過，先看看新卡'
+      : '已開始掃描「' + LN[k] + '」，約 1～5 分鐘');
+  } catch (e) {
+    S.scan[k] = prev;   // 回滾
+    if (e instanceof AdapterError && e.kind === 'auth') setAuth();
+    if (e instanceof AdapterError && e.kind === 'perm') loadWho();
+    toast('沒有開始掃描：' + reason(e), { bad: true });
+  } finally { S.scanBusy.delete(k); renderScan(); kickPoll(); }
+}
 // ---------------- 讀取：快照、逾時、輪詢、即時 ----------------
 // 開頁時算一次：金鑰失效後 KEY 會被清空，要靠這個值刪掉那把金鑰的快照（D 審稿 #7）
 let SNAP = '';
@@ -851,6 +1059,8 @@ async function refresh() {
     if (dr && viewOf() === 'full' && dr.crawlStatus === 'done' && !dr.detailText) ensureDetail(dr.id);
     // 正開著進度抽屜，而進度有更新（progress_updated_at 變了）：重抓步驟清單
     if (dr && viewOf() === 'progress') ensureProgress(dr.id);
+    loadMsgs();   // 跟肉咖說：不綁案子的對話（頂列紅點）＋正開著的那張卡
+    loadScan();   // 立即掃描：三籃狀態
     // 停在「等待付款同意」又沒有 pay 連結的卡（備援）：opp_list 不帶步驟備註，背景補抓一次，卡片上才畫得出「去領標付款」
     items().filter(i => laneOf(i) === 'active' && i.progressStageKey === PAY_STEP && !linkOf(i, 'pay')).forEach(i => ensureProgress(i.id));
     // 公告截止已過、目前步驟又不在送件後清單的卡：要看步驟（seal_submit 是否完成）才知道是不是已送件，背景補抓一次
@@ -874,7 +1084,7 @@ async function loadWho() {
   }
   renderAll();
 }
-const needFast = () => items().some(i => i.crawlStatus === 'crawling' || folderWait(i));
+const needFast = () => items().some(i => i.crawlStatus === 'crawling' || folderWait(i)) || SCAN_LANES.some(scanning);   // 掃描中也走 3 秒快輪詢
 function schedulePoll() { clearTimeout(pollT); if (S.net === 'auth') return; pollT = setTimeout(async () => { if (!document.hidden) await refresh(); schedulePoll(); }, needFast() ? CONFIG.FAST_POLL_MS : CONFIG.POLL_MS); }
 function kickPoll() { schedulePoll(); }
 const ping = () => { clearTimeout(pingT); pingT = setTimeout(refresh, 150); };
@@ -901,6 +1111,7 @@ document.addEventListener('click', e => {
   if (e.target.id === 'scrim') { S.drawer ? closeDrawer() : closeSheet(); return; }
   const tab = e.target.closest('[data-tab]'); if (tab) { S.tab = tab.dataset.tab; renderBoard(); return; }
   if (e.target.closest('#hpill,#holdbtn')) { openSheet(); return; }
+  if (e.target.closest('#rkbtn')) { openChat(); return; }
   if (a) {
     switch (a) {
       case 'del': actDel(id); break;
@@ -921,6 +1132,8 @@ document.addEventListener('click', e => {
       case 'open-hold': openSheet(); break;
       case 'tab-active': S.tab = 'active'; renderBoard(); break;
       case 'copy-path': copyPath(id); break;
+      case 'msg-send': msgSend(act.dataset.key || ''); break;
+      case 'scan': scanNow(act.dataset.lane); break;
     }
     return;
   }
@@ -991,6 +1204,7 @@ function pasteKey() {
   S.net = 'loading'; renderAll();
   unsub = api.subscribe(ping, on => { S.rt = on; renderLive(); }) || (() => {});
   loadWho();                             // opp_whoami：決定畫哪些按鈕（與列表平行）
+  renderRk();
   await refresh();
   schedulePoll();
   setInterval(tick, 30000);

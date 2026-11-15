@@ -14,6 +14,10 @@
 //   live5        重現線上情況：進行中只有 4 張卡住＋恆春（送件後）
 //   sentnodue    恆春示意卡（送件後）的目前步驟沒有期限（看「簡報日期未定」）
 //   sentcustom   恆春示意卡改用自訂步驟鍵、沒有期限（測「seal_submit 已完成」那條判斷）
+//   scanfail     立即掃描一律失敗（看回滾與 toast）
+//   （立即掃描的三種狀態預設就有：政府標案 40 分鐘前掃過可按、補助徵件掃描中、企劃提案 5 分鐘前剛掃過）
+//   msgnew       開頁 3 秒後肉咖在不綁案子的對話回一則新訊息（看頂列肉咖按鈕的小紅點）
+//   msgfail      跟肉咖說的送出一律失敗（看回滾與 toast）
 //   xss          多放幾張每個文字欄都塞 HTML、網址是 javascript: 的測試卡，確認畫面全部當文字顯示
 //   slow         列表 6 秒後才回來（看「載入比較久」）
 //   hang         列表一直不回來（看載入中與逾時）
@@ -26,7 +30,7 @@
 //   realbuild    要做之後照真卡流程：排隊 → 建立中 → 建好（看 3 秒快輪詢與第 1 步自動完成）
 //   folderslow   同 realbuild，但 12 秒後才建好
 //   live         9 秒後進來一張新卡（看新進光暈與 toast）
-import { AdapterError, normalize } from './adapter.js?v4';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
+import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq } from './adapter.js?v5';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
 
 const H = 3600e3, D = 24 * H, MIN = 60e3;
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -269,6 +273,36 @@ export function mockAdapter(modeStr) {
   const needAct = () => { if (viewer || (flags.has('demote') && whoN > 0)) throw new AdapterError('perm', 'missing capability can_act', 403); };
   const realBuild = flags.has('realbuild') || flags.has('folderslow');
   let nextN = 0;
+  // ---------- 跟肉咖說：示意對話（opp_msg_* 的欄位格式） ----------
+  const tAgo = m => iso(Date.now() - m * 60e3);
+  const me = () => viewer ? '示範唯讀' : flags.has('admin') ? '示範管理員' : '示範操作';
+  let msgs = flags.has('empty') ? [] : [
+    { id: 'm1', item_id: null, author: '同事 A', body: '這週可以先幫忙整理各案的截止日嗎？', reply_to: null, status: 'done', handled_by: RK, created_at: tAgo(180) },
+    { id: 'm2', item_id: null, author: RK, body: '好，各案截止日已經整理好，最近的是內政部那案，2 天後。（示意）', reply_to: 'm1', status: 'done', handled_by: RK, created_at: tAgo(150) },
+    { id: 'm3', item_id: 'demo-a10', author: '示範操作', body: '簡報日期確定了嗎？要提早排分鏡。', reply_to: null, status: 'done', handled_by: RK, created_at: tAgo(50) },
+    { id: 'm4', item_id: 'demo-a10', author: RK, body: '還沒確定，機關說這週五前通知。我先把分鏡初稿排進明天。（示意）', reply_to: 'm3', status: 'done', handled_by: RK, created_at: tAgo(30) },
+    { id: 'm5', item_id: 'demo-a1', author: '同事 A', body: '第二段節奏我看過了，可以。', reply_to: null, status: 'received', handled_by: null, created_at: tAgo(20) },
+  ];
+  if (flags.has('xss')) msgs.push({ id: 'mx', item_id: null, author: XP, body: XP + '\n第二行' + XP, reply_to: null, status: XP, handled_by: XP, created_at: tAgo(5) },
+                                  { id: 'mx2', item_id: 'xss-doing', author: RK, body: XP, reply_to: 'mx', status: 'done', handled_by: RK, created_at: tAgo(4) });
+  let msgN = 0;
+  // ---------- 立即掃描：三種狀態示意 ----------
+  const scanSt = {
+    tender: { lane: 'tender', status: 'done', result: '新增 2 張、重複 5 張', created_at: tAgo(42), done_at: tAgo(40), last_done_at: tAgo(40) },
+    grant: { lane: 'grant', status: 'running', result: null, created_at: tAgo(1), done_at: null, last_done_at: tAgo(180) },
+    pitch: { lane: 'pitch', status: 'done', result: '新增 0 張、重複 4 張', created_at: tAgo(6), done_at: tAgo(5), last_done_at: tAgo(5) },
+  };
+  // 補助徵件那筆「掃描中」：開頁 9 秒後掃完、新增 1 張卡
+  const finishScan = (lane, n) => {
+    const st = scanSt[lane]; if (!st || (st.status !== 'running' && st.status !== 'queued')) return;
+    for (let i = 0; i < n; i++) {
+      const src = rows.find(r => r.lane === lane && r.status === 'new') || rows.find(r => r.status === 'new');
+      if (src) { const c = Object.assign(JSON.parse(JSON.stringify(src)), { id: 'scan-' + lane + '-' + (++nextN), title: '掃描新進：' + ({ tender: '宣傳影片標案', grant: '影像補助', pitch: '品牌合作' }[lane]) + '（示意）', short_title: null, created_at: iso(Date.now()), status: 'new', crawl_status: 'none', full_text: '' }); rows.unshift(c); }
+    }
+    Object.assign(st, { status: 'done', result: '新增 ' + n + ' 張、重複 3 張', done_at: iso(Date.now()), last_done_at: iso(Date.now()) }); ping();
+  };
+  if (!flags.has('empty')) setTimeout(() => finishScan('grant', 1), 9000);
+  if (flags.has('msgnew')) setTimeout(() => { msgs.push({ id: 'mnew', item_id: null, author: RK, body: '補充：截止日表已更新，新增一筆補助。（示意）', reply_to: 'm1', status: 'done', handled_by: RK, created_at: iso(Date.now()) }); ping(); }, 3000);
 
   if (flags.has('live')) setTimeout(() => {
     const n = Object.assign({}, build()[1], { id: 'demo-new-' + (++nextN), title: '觀光宣傳短片', org: '某縣市觀光處', created_at: iso(Date.now()), deadline: iso(Date.now() + 9 * D), expire_at: iso(Date.now() + 9 * D) });
@@ -367,6 +401,37 @@ export function mockAdapter(modeStr) {
         }
       }
       return normalize(card(r));
+    },
+    async scanStatus() { await wait(100); if (flags.has('offline')) throw new AdapterError('network', '連不上伺服器'); return normalizeScans({ server_time: iso(Date.now()), lanes: Object.fromEntries(Object.entries(scanSt).map(([l, x]) => [l, { latest: x.status ? Object.assign({}, x, { last_done_at: undefined }) : null, last_done_at: x.last_done_at || null }])) }); },
+    async scanRequest(lane) {
+      await wait(400); needAct();
+      if (flags.has('scanfail')) throw new AdapterError('server', '伺服器沒有回應');
+      if (!scanSt[lane]) throw new AdapterError('state', 'lane must be tender, grant or pitch', 400);
+      const st = scanSt[lane];
+      const req = () => Object.assign({}, st, { last_done_at: undefined });
+      if (st.status === 'queued' || st.status === 'running') return normalizeScanReq({ state: 'already', request: req() });
+      if (st.status === 'done' && st.done_at && Date.now() - Date.parse(st.done_at) < 15 * 60e3) return normalizeScanReq({ state: 'recent', request: req() });
+      Object.assign(st, { status: 'queued', result: null, created_at: iso(Date.now()), done_at: null });
+      setTimeout(() => { st.status = 'running'; ping(); }, 1500);
+      setTimeout(() => finishScan(lane, 2), 7000);
+      return normalizeScanReq({ state: 'queued', request: req() });
+    },
+    async msgList(itemId, limit) {
+      await wait(120);
+      if (flags.has('offline')) throw new AdapterError('network', '連不上伺服器');
+      const l = msgs.filter(m => !itemId || m.item_id === itemId).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));   // 示意：p_id 空時回全部（前端自己分不綁案子的）
+      return l.slice(0, limit || 50).map(normalizeMsg);
+    },
+    async msgAdd(itemId, body) {
+      await wait(500); needAct();
+      if (flags.has('msgfail')) throw new AdapterError('server', '伺服器沒有回應');
+      body = String(body || '').trim();
+      if (!body || body.length > 1000) throw new AdapterError('state', 'body must be 1 to 1000 characters', 400);
+      const m = { id: 'mm' + (++msgN), item_id: itemId || null, author: me(), body, reply_to: null, status: 'new', handled_by: null, created_at: iso(Date.now()) };
+      msgs.push(m);
+      setTimeout(() => { m.status = 'received'; m.handled_by = RK; ping(); }, 1200);   // 示意：肉咖收到
+      setTimeout(() => { m.status = 'done'; msgs.push({ id: m.id + 'r', item_id: m.item_id, author: RK, body: '收到，我先記下來，處理好會在這裡回你。（示意回覆）', reply_to: m.id, status: 'done', handled_by: RK, created_at: iso(Date.now()) }); ping(); }, 3200);
+      return normalizeMsg(m);
     },
     subscribe(onPing, onState) { listeners.add(onPing); onState(false); return () => listeners.delete(onPing); },
     setKey() {},
