@@ -33,7 +33,8 @@ export const CONFIG = {
          dive: 'opp_dive', stash: 'opp_stash', unstash: 'opp_unstash', drop: 'opp_drop', restore: 'opp_restore', build: 'opp_build',
          msgAdd: 'opp_msg_add', msgList: 'opp_msg_list',   // 跟肉咖說（sql/24，C 做）
          scanRequest: 'opp_scan_request', scanStatus: 'opp_scan_status',   // 立即掃描（C 做）
-         archive: 'opp_archive', unarchive: 'opp_unarchive', archiveList: 'opp_archive_list', purge: 'opp_purge' },   // 封存區與徹底刪除（sql/25，C 做）
+         archive: 'opp_archive', unarchive: 'opp_unarchive', archiveList: 'opp_archive_list', purge: 'opp_purge',   // 封存區與徹底刪除（sql/25）
+         followupList: 'opp_followup_list', followupUpdate: 'opp_followup_update' },   // 追蹤事項（sql/27，C 做）   // 封存區與徹底刪除（sql/25，C 做）
   MSG_LIMIT: 50,
 };
 
@@ -79,7 +80,7 @@ export async function createAdapter() {
   const configured = CONFIG.SUPABASE_URL.startsWith('http') && !CONFIG.SUPABASE_URL.includes('YOUR-PROJECT-REF') && !CONFIG.SUPABASE_ANON_KEY.startsWith('YOUR-');
   if (!configured) console.info('[好咖皮條客] adapter.js 的 SUPABASE_URL / SUPABASE_ANON_KEY 還是待填佔位，目前顯示示範資料');
   if (hasKey() && !forceMock && configured) return liveAdapter();
-  const { mockAdapter } = await import('./mock.js?v6');   // ?v 跟 sw.js 的 CACHE 一起換
+  const { mockAdapter } = await import('./mock.js?v7');   // ?v 跟 sw.js 的 CACHE 一起換
   return mockAdapter(forceMock ? mockFlag : '');
 }
 
@@ -147,12 +148,12 @@ export function normalize(r) {
 export const RK = '肉咖';   // 肉咖回覆的 author
 export function normalizeMsg(m) {
   return { id: str(m.id), itemId: m.item_id == null ? '' : str(m.item_id), author: str(m.author), body: str(m.body),
-    replyTo: m.reply_to == null ? '' : str(m.reply_to), status: str(m.status), handledBy: str(m.handled_by), createdAt: ts(m.created_at) };
+    replyTo: m.reply_to == null ? '' : str(m.reply_to), status: str(m.status), handledBy: str(m.handled_by), createdAt: ts(m.created_at), itemShortTitle: str(m.item_short_title) };
 }
 const msgs = d => (Array.isArray(d) ? d : (d && Array.isArray(d.items) ? d.items : [])).filter(x => x && typeof x === 'object' && x.id != null).map(normalizeMsg);
 
 // ---------- 立即掃描：opp_scan_status 回三籃最新狀態 {lane, status, result, created_at, done_at, last_done_at} ----------
-export const SCAN_LANES = ['tender', 'grant', 'pitch'];
+export const SCAN_LANES = ['tender', 'grant', 'pitch', 'watch'];   // watch：盯案後續（F；後端 opp_scan_status 有 lanes.watch 才顯示按鈕）
 function scanAdded(r) {   // result 可能是數字、{added|new|count}、或文字；抓得到數字才回
   if (typeof r === 'number') return r;
   if (r && typeof r === 'object') for (const k of ['added', 'new', 'new_count', 'count', 'inserted']) if (Number.isFinite(Number(r[k]))) return Number(r[k]);
@@ -160,9 +161,21 @@ function scanAdded(r) {   // result 可能是數字、{added|new|count}、或文
 }
 export function normalizeScan(x) {
   // phase（F 兩段式）：running 時是 scanning／judging／sending，done、failed 後是 null。result 例：「新增 3 件、重複 2 件（AI 判讀：推薦 6、…）」
-  const rt = typeof x.result === 'string' ? x.result.trim() : '', m = rt.match(/^([^（(]*)[（(](.*)[）)]\s*$/);
+  // 括號可能不只一組，例如「新增 0 件、重複 0 件（AI 判讀：推薦 7、…）（掃描 total=36 new=0 errors=0）」：
+  // 括號外是主文；括號內只留給人看的（AI 判讀…），有 key=value 的技術欄位一律不顯示（監工 2026-11-16）
+  const rt = typeof x.result === 'string' ? x.result.trim() : '';
+  // 依括號深度切段（D 審稿 #4）：最外層括號外是主文，每組最外層括號是一段（裡面的括號照留）
+  let main = '', cur = '', depth = 0; const groups = [];
+  for (const ch of rt) {
+    if (ch === '（' || ch === '(') { if (depth++ > 0) cur += ch; else cur = ''; }
+    else if ((ch === '）' || ch === ')') && depth > 0) { if (--depth > 0) cur += ch; else groups.push(cur); }
+    else if (depth > 0) cur += ch; else main += ch;
+  }
+  if (depth > 0 && cur) groups.push(cur);
+  main = main.trim();
+  const det = groups.map(g => g.trim()).filter(g => g && !/[A-Za-z_]+\s*=/.test(g)).join('；');
   return { lane: str(x.lane), status: str(x.status), phase: ['scanning', 'judging', 'sending'].includes(x.phase) ? x.phase : '',
-    added: scanAdded(m ? m[1] : x.result), resultText: rt, resultMain: m ? m[1].trim() : rt, resultDetail: m ? m[2].trim() : '',
+    added: scanAdded(main || x.result), resultText: rt, resultMain: main, resultDetail: det,
     createdAt: ts(x.created_at), doneAt: ts(x.done_at), lastDoneAt: ts(x.last_done_at) };
 }
 // sql/26：opp_scan_status 回 {server_time, lanes:{tender|grant|pitch:{latest, last_done_at}}}；latest 是該籃最新一筆請求或 null
@@ -184,6 +197,16 @@ export function normalizeScanReq(d) {
 // opp_archive_list 的精簡列沒有 status、progress_*、folder_status：補成「已結案的進行中卡」再正規化（有 folder_path 就當資料夾已建好）
 export const normalizeArchived = r => normalize(Object.assign({}, r, { status: 'doing', progress_state: 'done', progress_status: 'done', progress_outcome: r.outcome,
   folder_status: r.folder_status || (r.folder_path ? 'done' : '') }));
+
+// ---------- 追蹤事項（sql/27）：opp_followup_list 回陣列，每筆 {id, item_id, item_short_title, title, owner, requested_by, due_at, remind_rule, status, source, note, close_note, …, overdue} ----------
+export const FU_STATUS = ['open', 'done', 'dropped'];
+export function normalizeFollowup(f) {
+  return { id: str(f.id), itemId: f.item_id == null ? '' : str(f.item_id), itemShortTitle: str(f.item_short_title), title: str(f.title),
+    owner: str(f.owner), requestedBy: str(f.requested_by), dueAt: ts(f.due_at), remindRule: str(f.remind_rule),
+    status: FU_STATUS.includes(f.status) ? f.status : 'open', source: str(f.source), note: str(f.note), closeNote: str(f.close_note),
+    createdAt: ts(f.created_at), updatedAt: ts(f.updated_at), doneAt: ts(f.done_at), updatedBy: nick(str(f.updated_by)), overdue: !!f.overdue };
+}
+export const normalizeFollowups = d => (Array.isArray(d) ? d : (d && Array.isArray(d.items) ? d.items : [])).filter(x => x && typeof x === 'object' && x.id != null).map(normalizeFollowup);
 
 // ---------- 真後端（Supabase REST + Realtime） ----------
 function liveAdapter() {
@@ -235,6 +258,9 @@ function liveAdapter() {
     async archive(id, kind, note) { return card(await rpc(R.archive, { p_id: id, p_kind: kind, p_note: note || null })); },
     async unarchive(id) { return card(await rpc(R.unarchive, { p_id: id })); },
     async archiveList(q, year, limit) { const d = await rpc(R.archiveList, { p_q: q || null, p_year: year || null, p_limit: limit || 100 }); return (Array.isArray(d) ? d : (d && Array.isArray(d.items) ? d.items : [])).filter(x => x && x.id).map(normalizeArchived); },
+    // 追蹤事項：讀 viewer 以上；改只有 planner 或 admin（其他回 28000 → 403）
+    async followupList(status, itemId, limit) { return normalizeFollowups(await rpc(R.followupList, { p_status: status || 'open', p_item_id: itemId || null, p_limit: limit || 200 })); },
+    async followupUpdate(fid, patch) { const d = await rpc(R.followupUpdate, { p_fid: fid, p_patch: patch }); const one = Array.isArray(d) ? d[0] : d; return one && typeof one === 'object' && one.id != null ? normalizeFollowup(one) : null; },
     async purge(id, title) { return await rpc(R.purge, { p_id: id, p_confirm_title: title }); },
     async scanStatus() { return normalizeScans(await rpc(R.scanStatus, {})); },
     async scanRequest(lane) { return normalizeScanReq(await rpc(R.scanRequest, { p_lane: lane })); },

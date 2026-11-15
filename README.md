@@ -13,7 +13,13 @@
 - `js/mock.js`：示範資料與假動作，以及偵錯用的 `?mock=` 參數（`viewer`、`slow`、`crawlslow`、`crawlhang`、`crawlfail`、`realbuild`、`setfail` 等，說明在檔頭）。
 - `js/app.js`：狀態、畫面、事件。待定文案集中在檔頭的 `TBD` 常數。
 - `js/util.js`：時間（台北時區）、相對時間、倒數、中文斷行、金額。
-- `sw.js`：只快取同網域畫面檔，網路優先，API 請求不經過它。**每次改版要一起換三處**：`sw.js` 的 `CACHE`（目前 `opp-co-shell-v6`）與 `V`、`index.html` 和各 js `import` 網址後面的 `?v6`（app.js 兩處、mock.js 一處、adapter.js 的 mock 動態匯入一處）。GitHub Pages 會讓瀏覽器快取檔案約 10 分鐘，不帶版本號會拿到新舊混搭的 js。
+- **發版只要換兩處**（v7 起）：
+  1. `version.json` 寫新版本，例如 `{"version":"v8"}`。
+  2. 全部網址後面的 `?vN` 換成同一個版本：`index.html`（css、js、manifest、圖示）、`js/app.js` 開頭兩個 import、`js/mock.js` 開頭的 import、`js/adapter.js` 動態匯入 mock 那一行、`manifest.webmanifest` 的圖示。可以用 `sed -i '' 's/?v7/?v8/g' index.html manifest.webmanifest js/*.js` 一次換。
+  - `sw.js` 不用改：快取名固定是 `opp-co-shell`。HTML 和 version.json 一律走網路，而且不讀瀏覽器快取（no-store）。頁面會告訴 SW 目前的版本，SW 就把其他版本的檔清掉。
+  - 頁面在載入、切回前景、取得焦點時，還有每 10 分鐘，都會抓一次 `version.json`。版本跟正在跑的 js（`?vN`）不同，就請 SW 換新並自動重新整理。抽屜、待決區、確認框開著，或輸入框有字時，先不整理，頂端改顯示「有新版本，點一下更新」。
+  - 剛為某一版整理過、拿到的還是舊檔（GitHub Pages 換檔的那幾分鐘）：2 分鐘內不再自動整理，改顯示提示，避免一直重整。
+  - **兩處要一起換**：只換 `version.json`、沒換 `?vN`，頁面會以為還是舊版，整理後只會顯示提示。
 - `manifest.webmanifest`、`icons/`：加到主畫面用（短名「皮條客」，刻意不寫 start_url 與 scope）。圖示由 `00_專案指示與背景/面板icon_原檔_20261116.png` 用 sips 縮出：icon-192／512、icon-maskable-512（縮到 80% 再用底色 #213D74 補邊）、apple-touch-icon 180、favicon 32／16。圖示網址也帶 `?v`，改版時跟 CACHE 一起換。
 
 ## 金鑰與權限

@@ -13,12 +13,12 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="皮條客">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="manifest.webmanifest?v6">
+<link rel="manifest" href="manifest.webmanifest?v7">
 <!-- 圖示：2026-11-16 新 icon（深藍底、米白長方塊、半深藍半橘紅的圓），檔名帶 ?v，iOS 才會抓新圖 -->
-<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v6">
-<link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v6">
-<link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png?v6">
-<link rel="stylesheet" href="css/app.css?v6">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v7">
+<link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v7">
+<link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png?v7">
+<link rel="stylesheet" href="css/app.css?v7">
 <!-- 網路字型只當加分：不擋畫面，載入完用 swap 換上；沒網路時走 css 裡的系統字型。 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -34,6 +34,7 @@
     </div>
     <div class="top-r">
       <p class="sum" id="sum"></p>
+      <button class="fubtn" id="fubtn" type="button" aria-haspopup="dialog" aria-label="追蹤事項" hidden><span class="full">追蹤事項</span><span class="short">追蹤</span></button>
       <button class="archbtn" id="archbtn" type="button" aria-haspopup="dialog" aria-label="封存區"><span class="full">封存區</span><span class="short">封存</span></button>
       <button class="rkbtn" id="rkbtn" type="button" aria-haspopup="dialog" aria-label="跟肉咖說"><span>肉咖</span></button>
       <button class="holdbtn" id="holdbtn" type="button" aria-haspopup="dialog"></button>
@@ -49,7 +50,8 @@
 <aside class="panel drawer" id="drawer" role="dialog" aria-modal="true" aria-label="詳細資料"></aside>
 <div class="dlg-wrap" id="dlg" hidden><div class="dlg" role="dialog" aria-modal="true" aria-labelledby="dlg-t"></div></div>
 <div id="toast" role="status" aria-live="polite"></div>
+<button class="updbar" id="updbar" type="button" hidden>有新版本，點一下更新</button>
 <!-- 改版時 css／js 網址後面的 ?v 要跟 sw.js 的 CACHE 一起換，手機才不會拿到新舊混搭的檔 -->
-<script type="module" src="js/app.js?v6"></script>
+<script type="module" src="js/app.js?v7"></script>
 </body>
 </html>

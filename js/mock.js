@@ -32,7 +32,7 @@
 //   realbuild    要做之後照真卡流程：排隊 → 建立中 → 建好（看 3 秒快輪詢與第 1 步自動完成）
 //   folderslow   同 realbuild，但 12 秒後才建好
 //   live         9 秒後進來一張新卡（看新進光暈與 toast）
-import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq, normalizeArchived } from './adapter.js?v6';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
+import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq, normalizeArchived, normalizeFollowups, normalizeFollowup } from './adapter.js?v7';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
 
 const H = 3600e3, D = 24 * H, MIN = 60e3;
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -275,6 +275,19 @@ export function mockAdapter(modeStr) {
     [['demo-b1', '城市行銷短片（示意）', '等機關回覆修改意見'], ['demo-b2', '文化節紀錄片（示意）', '等合作單位提供素材'], ['demo-b3', '博物館導覽影片（示意）', '等公司用印']].forEach(([id, title, why]) =>
       rows.push(Object.assign(JSON.parse(JSON.stringify(base)), { id, title, short_title: null, progress_blocker: why, source_url: SRC + id })));
   }
+  if (flags.has('live1116')) {   // 重現線上 11/16 的進行中，驗急迫排序：恆春（送件後，下一步 26 小時後）→ 台江 → 傳藝 → 公視 → 故宮，再來沒日期的、最後已結案的
+    const sentR = rows.find(r => r.id === 'demo-a10'), base = rows.find(r => r.id === 'demo-a2');
+    const cur = sentR.progress_steps.find(x => x.status === 'current'); if (cur) cur.due_at = iso(Date.now() + 26 * H); derive(sentR);
+    const mk = (id, title, h, extra) => { const r = Object.assign(JSON.parse(JSON.stringify(base)), { id, title, short_title: null, deadline: h == null ? null : iso(Date.now() + h * H), deadline_text: null,
+      source_url: SRC + id, progress_blocker: null, progress_state: 'active' }, extra || {}); r.progress_steps.forEach(x => { x.due_at = null; }); derive(r); return r; };
+    rows = rows.filter(r => r.status !== 'doing' || r.id === 'demo-a10');
+    rows.push(mk('demo-l7', '已結案的案子（示意）', null, { progress_state: 'done', progress_outcome: 'won', progress_archive_at: iso(Date.now() + 10 * D) }),
+      mk('demo-l5', '故宮數位展影片（示意）', 7 * 24), mk('demo-l2', '台江國家公園影片（示意）', 52), mk('demo-l6', '沒有日期的提案（示意）', null),
+      mk('demo-l4', '公視合製短片（示意）', 82), mk('demo-l3', '傳藝中心推廣影片（示意）', 59, { progress_state: 'blocked', progress_blocker: '等合作單位提供素材' }));
+    rows.filter(r => r.id === 'demo-l7').forEach(r => { r.progress_steps.forEach(x => { x.status = 'done'; }); derive(r); });
+  }
+  { const w = rows.find(r => r.id === 'demo-w1'), t = rows.find(r => r.lane === 'tender' && r.status === 'new');   // 盯案與正式公告接上（F 的 why 開頭格式）
+    if (w && t) { w.why = '正式公告已上看板（政府標案：' + t.title + '）。' + (w.why || ''); t.why = '（之前在盯案後續：' + w.title + '）' + (t.why || ''); } }
   if (flags.has('xss')) rows = rows.concat(xssRows().map(r => { if (r.status === 'doing') derive(r); return r; }));
   rows.forEach(r => { r.deadline_text = r.deadline_text || fmtTxt(r.deadline); r.deadline_approx = !!r.deadline_approx; });
   const listeners = new Set();
@@ -297,25 +310,40 @@ export function mockAdapter(modeStr) {
     { id: 'm2', item_id: null, author: RK, body: '好，各案截止日已經整理好，最近的是內政部那案，2 天後。（示意）', reply_to: 'm1', status: 'done', handled_by: RK, created_at: tAgo(150) },
     { id: 'm3', item_id: 'demo-a10', author: '示範操作', body: '簡報日期確定了嗎？要提早排分鏡。', reply_to: null, status: 'done', handled_by: RK, created_at: tAgo(50) },
     { id: 'm4', item_id: 'demo-a10', author: RK, body: '還沒確定，機關說這週五前通知。我先把分鏡初稿排進明天。（示意）', reply_to: 'm3', status: 'done', handled_by: RK, created_at: tAgo(30) },
+    { id: 'm6', item_id: 'demo-a10', author: '示範操作', body: '機關回了：簡報 11/18 早上 8 點，20 分鐘。', reply_to: null, status: 'done', handled_by: RK, created_at: tAgo(12) },
+    { id: 'm7', item_id: 'demo-a10', author: RK, body: '收到，簡報稿改成 20 分鐘版本，明天中午前放內審。（示意）', reply_to: 'm6', status: 'done', handled_by: RK, created_at: tAgo(8) },
     { id: 'm5', item_id: 'demo-a1', author: '同事 A', body: '第二段節奏我看過了，可以。', reply_to: null, status: 'received', handled_by: null, created_at: tAgo(20) },
   ];
   if (flags.has('xss')) msgs.push({ id: 'mx', item_id: null, author: XP, body: XP + '\n第二行' + XP, reply_to: null, status: XP, handled_by: XP, created_at: tAgo(5) },
                                   { id: 'mx2', item_id: 'xss-doing', author: RK, body: XP, reply_to: 'mx', status: 'done', handled_by: RK, created_at: tAgo(4) });
   let msgN = 0;
+  // ---------- 追蹤事項示意（opp_followups 的欄位格式） ----------
+  const fuAt = h => iso(Date.now() + h * H);
+  let fus = flags.has('empty') ? [] : [
+    { id: 'f1', item_id: 'demo-a10', title: '回覆機關簡報時間，順便問可不可以帶樣片', owner: 'Louis', requested_by: 'Borry', due_at: fuAt(3), remind_rule: 'day_before', status: 'open', source: 'line', note: null, close_note: null, created_at: fuAt(-20), updated_at: fuAt(-20), done_at: null },
+    { id: 'f2', item_id: null, title: '寄用印文件正本給機關（掛號）', owner: 'CC', requested_by: 'Borry', due_at: fuAt(-26), remind_rule: 'daily', status: 'open', source: 'line', note: '地址在招標文件第 3 頁', close_note: null, created_at: fuAt(-50), updated_at: fuAt(-50), done_at: null },
+    { id: 'f3', item_id: null, title: '查文化部補助核定公告有沒有出來', owner: null, requested_by: '同事 A', due_at: null, remind_rule: null, status: 'open', source: 'panel', note: null, close_note: null, created_at: fuAt(-5), updated_at: fuAt(-5), done_at: null },
+    { id: 'f4', item_id: 'demo-a10', title: '跟對方確認場勘時間', owner: 'Borry', requested_by: 'Louis', due_at: fuAt(-30), remind_rule: null, status: 'done', source: 'line', note: null, close_note: '群組 11/15 Louis 說已回', created_at: fuAt(-80), updated_at: fuAt(-24), done_at: fuAt(-24) },
+    { id: 'f5', item_id: null, title: '訂下週的棚', owner: 'CC', requested_by: 'Borry', due_at: fuAt(48), remind_rule: null, status: 'dropped', source: 'line', note: null, close_note: '改外景，不用棚', created_at: fuAt(-40), updated_at: fuAt(-10), done_at: fuAt(-10) },
+  ];
+  if (flags.has('xss')) fus.push({ id: 'fx', item_id: 'xss-doing', title: XP, owner: XP, requested_by: XP, due_at: fuAt(-1), remind_rule: XP, status: 'open', source: XP, note: XP, close_note: XP, created_at: fuAt(-2), updated_at: fuAt(-2), done_at: null });
+  const fuOut = f => Object.assign({}, f, { item_short_title: f.item_id ? ((rows.find(r => r.id === f.item_id) || {}).short_title || (rows.find(r => r.id === f.item_id) || {}).title || null) : null,
+    overdue: f.status === 'open' && !!f.due_at && Date.parse(f.due_at) < Date.now(), duplicate: false });
   // ---------- 立即掃描：三種狀態示意 ----------
   const scanSt = {
-    tender: { lane: 'tender', status: 'done', result: '新增 2 件、重複 5 件（AI 判讀：推薦 4、可視人力加投 1、不推薦 12）', created_at: tAgo(42), done_at: tAgo(40), last_done_at: tAgo(40) },
+    tender: { lane: 'tender', status: 'done', result: '新增 2 件、重複 5 件（AI 判讀：推薦 4、可視人力加投 1、不推薦 12）（掃描 total=19 new=2 errors=0）', created_at: tAgo(42), done_at: tAgo(40), last_done_at: tAgo(40) },
     grant: { lane: 'grant', status: 'running', phase: 'judging', result: null, created_at: tAgo(1), done_at: null, last_done_at: tAgo(180) },
-    pitch: { lane: 'pitch', status: 'done', result: '新增 0 件、重複 4 件（AI 判讀：推薦 0、可視人力加投 0、不推薦 9）', created_at: tAgo(6), done_at: tAgo(5), last_done_at: tAgo(5) },
+    ...(flags.has('nowatch') ? {} : { watch: { lane: 'watch', status: 'done', result: '新增 7 件、重複 0 件（AI 判讀：值得盯 7 件、不盯 1 件；1 張正式公告接上盯案；來源：採購網公開徵求、公開閱覽、無法決標）', created_at: tAgo(30), done_at: tAgo(26), last_done_at: tAgo(26) } }),   // ?mock=nowatch：舊後端沒有 lanes.watch
+    pitch: flags.has('pitchnull') ? { lane: 'pitch', status: null } : { lane: 'pitch', status: 'done', result: '新增 0 件、重複 4 件（AI 判讀：推薦 0、可視人力加投 0、不推薦 9）', created_at: tAgo(6), done_at: tAgo(5), last_done_at: tAgo(5) },
   };
   // 補助徵件那筆「掃描中」：開頁 9 秒後掃完、新增 1 張卡
   const finishScan = (lane, n) => {
     const st = scanSt[lane]; if (!st || (st.status !== 'running' && st.status !== 'queued')) return;
     for (let i = 0; i < n; i++) {
       const src = rows.find(r => r.lane === lane && r.status === 'new') || rows.find(r => r.status === 'new');
-      if (src) { const c = Object.assign(JSON.parse(JSON.stringify(src)), { id: 'scan-' + lane + '-' + (++nextN), title: '掃描新進：' + ({ tender: '宣傳影片標案', grant: '影像補助', pitch: '品牌合作' }[lane]) + '（示意）', short_title: null, created_at: iso(Date.now()), status: 'new', crawl_status: 'none', full_text: '' }); rows.unshift(c); }
+      if (src) { const c = Object.assign(JSON.parse(JSON.stringify(src)), { id: 'scan-' + lane + '-' + (++nextN), title: '掃描新進：' + ({ tender: '宣傳影片標案', grant: '影像補助', pitch: '品牌合作', watch: '公開徵求（預計 12/7 前後公告）' }[lane]) + '（示意）', short_title: null, created_at: iso(Date.now()), status: 'new', crawl_status: 'none', full_text: '', why: '掃描新進的示意卡。' }); rows.unshift(c); }
     }
-    Object.assign(st, { status: 'done', phase: null, result: '新增 ' + n + ' 件、重複 3 件（AI 判讀：推薦 ' + (n + 2) + '、可視人力加投 1、不推薦 15）', done_at: iso(Date.now()), last_done_at: iso(Date.now()) }); ping();
+    Object.assign(st, { status: 'done', phase: null, result: '新增 ' + n + ' 件、重複 3 件（AI 判讀：推薦 ' + (n + 2) + '、可視人力加投 1、不推薦 15）（掃描 total=' + (n + 18) + ' new=' + n + ' errors=0）', done_at: iso(Date.now()), last_done_at: iso(Date.now()) }); ping();
   };
   if (!flags.has('empty')) setTimeout(() => finishScan('grant', 1), 9000);
   if (flags.has('msgnew')) setTimeout(() => { msgs.push({ id: 'mnew', item_id: null, author: RK, body: '補充：截止日表已更新，新增一筆補助。（示意）', reply_to: 'm1', status: 'done', handled_by: RK, created_at: iso(Date.now()) }); ping(); }, 3000);
@@ -334,7 +362,7 @@ export function mockAdapter(modeStr) {
       if (demoted) return { role: '示範降權', kind: 'viewer', caps: { read: true, act: false, add: false, edit: false, fulltext: false, remind: false, progress: false, notion: false, mac: false, admin: false } };
       return viewer
         ? { role: '示範唯讀', kind: 'viewer', caps: { read: true, act: false, add: false, edit: false, fulltext: false, remind: false, progress: false, notion: false, mac: false, admin: false } }
-        : { role: flags.has('admin') ? '示範管理員' : '示範操作', kind: flags.has('admin') ? 'admin' : 'operator', caps: { read: true, act: true, add: false, edit: false, fulltext: false, remind: false, progress: false, notion: false, mac: false, admin: flags.has('admin') } };
+        : { role: flags.has('admin') ? '示範管理員' : '示範操作', kind: flags.has('admin') ? 'admin' : 'operator', caps: Object.assign({ read: true, act: true, add: false, edit: false, fulltext: false, remind: false, progress: false, notion: false, mac: false, admin: flags.has('admin') }, flags.has('buildtender') ? { build_tender: true } : {}, flags.has('progress') ? { progress: true } : {}) };   // ?mock=progress：有 can_progress 的 operator（追蹤事項可寫）   // ?mock=buildtender：有 build_tender 的 operator（sql/28）
     },
     async list() {
       if (flags.has('hang')) await new Promise(() => {});
@@ -376,7 +404,7 @@ export function mockAdapter(modeStr) {
         case 'build': {
           if (r.status === 'doing') break;
           if (r.status !== 'new' && r.status !== 'stashed') throw new AdapterError('state', 'card is ' + r.status, 400);
-          if (r.lane === 'tender' && !flags.has('admin')) throw new AdapterError('perm', 'only an admin key can build tender cards', 403);   // sql/21
+          if (r.lane === 'tender' && !flags.has('admin') && !flags.has('buildtender')) throw new AdapterError('perm', 'only an admin key can build tender cards', 403);   // sql/21、28
           const d = new Date(now + 8 * H), pad = n => String(n).padStart(2, '0');
           Object.assign(r, { status: 'doing', decided_at: iso(now), stash_due_at: null, remind_at: null,
             folder_name: pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate()) + '_' + (r.short_title || r.title).replace(/（[^）]*）/g, '').slice(0, 40),
@@ -470,7 +498,8 @@ export function mockAdapter(modeStr) {
     async scanRequest(lane) {
       await wait(400); needAct();
       if (flags.has('scanfail')) throw new AdapterError('server', '伺服器沒有回應');
-      if (!scanSt[lane]) throw new AdapterError('state', 'lane must be tender, grant or pitch', 400);
+      if (lane === 'watch' && flags.has('watchclosed')) throw new AdapterError('state', 'lane must be tender, grant or pitch', 400);   // ?mock=watchclosed：狀態有 watch 但請求還不收
+      if (!scanSt[lane]) throw new AdapterError('state', 'lane must be tender, grant, pitch' + (flags.has('nowatch') ? '' : ' or watch'), 400);
       const st = scanSt[lane];
       const req = () => Object.assign({}, st, { last_done_at: undefined });
       if (st.status === 'queued' || st.status === 'running') return normalizeScanReq({ state: 'already', request: req() });
@@ -482,6 +511,28 @@ export function mockAdapter(modeStr) {
       if (flags.has('scanfailed')) setTimeout(() => { Object.assign(st, { status: 'failed', phase: null, result: 'AI 判讀逾時（示意）', done_at: iso(Date.now()) }); ping(); }, 6500);
       else setTimeout(() => finishScan(lane, 2), 7000);
       return normalizeScanReq({ state: 'queued', request: req() });
+    },
+    async followupList(status, itemId, limit) {
+      await wait(120);
+      if (flags.has('offline')) throw new AdapterError('network', '連不上伺服器');
+      if (flags.has('fufail')) throw new AdapterError('server', '伺服器沒有回應');
+      const st = status || 'open';
+      if (!['open', 'done', 'dropped', 'all'].includes(st)) throw new AdapterError('state', 'status must be open, done, dropped or all', 400);
+      const t = f => Date.parse(f.done_at || f.created_at);
+      return normalizeFollowups(fus.filter(f => (st === 'all' || f.status === st) && (!itemId || f.item_id === itemId))
+        .sort((a, b) => st === 'open' ? ((a.due_at ? Date.parse(a.due_at) : Infinity) - (b.due_at ? Date.parse(b.due_at) : Infinity)) : t(b) - t(a))
+        .slice(0, limit || 200).map(fuOut));
+    },
+    async followupUpdate(fid, patch) {
+      await wait(300);
+      if (!flags.has('admin') && !flags.has('progress')) throw new AdapterError('perm', 'only planner or admin can update follow-ups', 403);
+      const f = fus.find(x => x.id === fid); if (!f) throw new AdapterError('state', 'not found', 404);
+      const ok = ['title', 'owner', 'requested_by', 'due_at', 'item_id', 'remind_rule', 'note', 'status', 'close_note'];
+      Object.keys(patch || {}).forEach(k => { if (!ok.includes(k)) throw new AdapterError('state', 'patch key not allowed: ' + k, 400); });
+      Object.assign(f, patch, { updated_at: iso(Date.now()) });
+      if (patch.status === 'open') f.done_at = null; else if (patch.status) f.done_at = iso(Date.now());
+      ping();
+      return normalizeFollowup(fuOut(f));
     },
     async msgList(itemId, limit) {
       await wait(120);
