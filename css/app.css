@@ -443,7 +443,7 @@ p,li{text-wrap:pretty}
   .df{padding:6px 16px calc(env(safe-area-inset-bottom) + 6px)}
   .df .btn{min-height:46px}
 }
-/* 進行中的進度底欄：複製資料夾位置、開啟 Notion 頁、回到面板（放不下就換行，回到面板佔一整列） */
+/* 進行中的進度底欄：複製本機資料夾位置、回到面板（放不下就換行，回到面板佔一整列） */
 .df.prog-foot{flex-wrap:wrap}
 .df.prog-foot .btn{flex:1 1 auto;padding:0 14px}
 .df.prog-foot .btn[data-act=close-drawer]:not(:first-child){flex:1 1 100%;min-height:48px}
@@ -485,3 +485,18 @@ p,li{text-wrap:pretty}
 .lane.swipe-r{animation:swr .22s cubic-bezier(.2,.8,.2,1)}
 /* 已送件的進行中卡：倒數那格沒有內部期限時寫「已送件」 */
 .tm .nodl.sent{color:var(--ok);font-size:16px;font-weight:800}
+/* 送件後的進行中卡（v4）：大字是目前步驟，倒數盯下一個里程碑，「已送件 11/10」是小標籤 */
+.c1.sent-top{justify-content:flex-start;gap:6px 8px}
+.c1.sent-top .demo-badge{margin-left:auto}
+.step-big{font-family:var(--num);font-size:23px;font-weight:900;line-height:1.25;color:var(--ink)}
+.stage.sent-row{gap:6px 10px;margin:0 0 6px}
+.stage.sent-row .tm b{font-family:var(--num);font-size:22px;font-weight:900;color:var(--lv)}   /* 蓋過 .stage b 的黑字，照緊急度上色 */
+.tm .nodl.tbd{color:var(--warm);font-size:15px;font-weight:800}
+.sent-tag{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;background:var(--ok-bg);color:var(--ok-ink);font-size:12px;font-weight:700;white-space:nowrap}
+.prog-upd.sent-line{color:var(--ok-ink);font-weight:700}
+@container (max-width:300px){ .step-big{font-size:19px} .stage.sent-row .tm b{font-size:19px} }
+@container (max-width:200px){ .step-big{font-size:16px} .stage.sent-row .tm b{font-size:16px} }
+/* 附件清單：預設收合，點「附件 N 個 ▸」展開 */
+.dt-text .att-toggle{display:inline-flex;align-items:center;gap:6px;min-height:44px;padding:0 6px;font-size:14.5px;font-weight:700;color:var(--link);border-radius:10px}
+.dt-text .att-toggle:hover{background:var(--stat)}
+.dt-text .att-toggle span{font-size:12px}

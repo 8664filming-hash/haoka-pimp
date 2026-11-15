@@ -13,8 +13,8 @@
 - `js/mock.js`：示範資料與假動作，以及偵錯用的 `?mock=` 參數（`viewer`、`slow`、`crawlslow`、`crawlhang`、`crawlfail`、`realbuild`、`setfail` 等，說明在檔頭）。
 - `js/app.js`：狀態、畫面、事件。待定文案集中在檔頭的 `TBD` 常數。
 - `js/util.js`：時間（台北時區）、相對時間、倒數、中文斷行、金額。
-- `sw.js`：只快取同網域畫面檔，網路優先，API 請求不經過它。**每次改版要一起換三處**：`sw.js` 的 `CACHE`（目前 `opp-co-shell-v3`）與 `V`、`index.html` 和各 js `import` 網址後面的 `?v3`（app.js 兩處、mock.js 一處、adapter.js 的 mock 動態匯入一處）。GitHub Pages 會讓瀏覽器快取檔案約 10 分鐘，不帶版本號會拿到新舊混搭的 js。
-- `manifest.webmanifest`、`icons/`：加到主畫面用（短名「皮條客」，刻意不寫 start_url 與 scope）。
+- `sw.js`：只快取同網域畫面檔，網路優先，API 請求不經過它。**每次改版要一起換三處**：`sw.js` 的 `CACHE`（目前 `opp-co-shell-v4`）與 `V`、`index.html` 和各 js `import` 網址後面的 `?v4`（app.js 兩處、mock.js 一處、adapter.js 的 mock 動態匯入一處）。GitHub Pages 會讓瀏覽器快取檔案約 10 分鐘，不帶版本號會拿到新舊混搭的 js。
+- `manifest.webmanifest`、`icons/`：加到主畫面用（短名「皮條客」，刻意不寫 start_url 與 scope）。圖示由 `00_專案指示與背景/面板icon_原檔_20261116.png` 用 sips 縮出：icon-192／512、icon-maskable-512（縮到 80% 再用底色 #213D74 補邊）、apple-touch-icon 180、favicon 32／16。圖示網址也帶 `?v`，改版時跟 CACHE 一起換。
 
 ## 金鑰與權限
 - 用 `網址?k=金鑰` 開（也收 `#k=金鑰`）。金鑰存進 localStorage 的 `copp_key`（與個人版的 `opp_key` 分開），快照存 `copp.snapshot.v1:<金鑰前 6 碼>`，並留在網址列上。

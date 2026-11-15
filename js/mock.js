@@ -11,7 +11,9 @@
 //   demote       第一次 opp_whoami 是 operator，之後變 viewer，寫入一律回權限不足（模擬金鑰被降權）
 //   authlater    第一次列表成功，之後一律金鑰失效（看失效後停輪詢、清快照）
 //   debug        在 window 上放 __mockListCalls（列表被呼叫幾次）、__mockPing()（模擬 realtime ping）、__mockListeners（訂閱數）
-//   sentcustom   已送件示意卡改用自訂步驟鍵、沒有內部期限（測「seal_submit 已完成」那條判斷）
+//   live5        重現線上情況：進行中只有 4 張卡住＋恆春（送件後）
+//   sentnodue    恆春示意卡（送件後）的目前步驟沒有期限（看「簡報日期未定」）
+//   sentcustom   恆春示意卡改用自訂步驟鍵、沒有期限（測「seal_submit 已完成」那條判斷）
 //   xss          多放幾張每個文字欄都塞 HTML、網址是 javascript: 的測試卡，確認畫面全部當文字顯示
 //   slow         列表 6 秒後才回來（看「載入比較久」）
 //   hang         列表一直不回來（看載入中與逾時）
@@ -24,7 +26,7 @@
 //   realbuild    要做之後照真卡流程：排隊 → 建立中 → 建好（看 3 秒快輪詢與第 1 步自動完成）
 //   folderslow   同 realbuild，但 12 秒後才建好
 //   live         9 秒後進來一張新卡（看新進光暈與 toast）
-import { AdapterError, normalize } from './adapter.js?v3';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
+import { AdapterError, normalize } from './adapter.js?v4';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
 
 const H = 3600e3, D = 24 * H, MIN = 60e3;
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -83,13 +85,13 @@ function build() {
     source_url: '', source_site: '', found_by: 'Company Claude', remind_at: null, stash_due_at: null, decided_at: null, drop_reason: null,
     case_no: null, tender_method: null, bid_bond: null, performance_period: null, qualification: null,
     crawl_status: 'none', crawl_error: null, full_text: '', attachments: [],
-    folder_status: 'none', folder_name: null, folder_path: null, folder_error: null, notion_status: null, notion_url: null,
+    folder_status: 'none', folder_name: null, folder_path: null, folder_error: null,
     progress_state: null, progress_steps: [], progress_note: null, progress_blocker: null, progress_outcome: null, progress_archive_at: null,
     progress_updated_at: null, progress_updated_by: null, links: [],
   };
   const row = o => Object.assign({}, base, o);
   const doing = (o, lane, n, so) => {
-    const r = row(Object.assign({ status: 'doing', lane, folder_status: 'done', notion_status: 'skipped', decided_at: ago(60) }, o));
+    const r = row(Object.assign({ status: 'doing', lane, folder_status: 'done', decided_at: ago(60) }, o));
     r.progress_steps = stepsAt(lane, n, so || {});
     return r;
   };
@@ -126,7 +128,7 @@ function build() {
     doing({ id: 'demo-a1', title: '地方創生紀錄短片', org: '農業部農村發展及水土保持署', amount_label: '預算', amount_display: '150萬', deadline: at(16, 17), created_at: ago(70),
       case_no: '1150807（示意）', tender_method: '公開招標', bid_bond: '不用', performance_period: '決標後 90 天', qualification: '公司登記，營業項目含廣告與影片製作。',
       source_site: '政府電子採購網', source_url: SRC + 'active-1', folder_name: '11-14_地方創生紀錄短片', folder_path: '/Users/Shared/公司工作區/11-14_地方創生紀錄短片',
-      notion_status: 'done', notion_url: SRC + 'notion-page', progress_state: 'active', progress_note: '初稿結構已出，等你看第二段節奏。',
+      progress_state: 'active', progress_note: '初稿結構已出，等你看第二段節奏。',
       links: [{ kind: 'pool', label: 'Pool 官方文件與成品', url: 'https://drive.google.com/drive/folders/DEMO-POOL-A1' }, { kind: 'review', label: '標案內審', url: 'https://drive.google.com/drive/folders/DEMO-REVIEW-A1' }, { kind: 'other', label: '示意：不是 https 的連結不會出現', url: 'http://example.org/insecure' }],
       progress_updated_at: iso(now - 22 * MIN), progress_updated_by: 'Company Claude' }, 'tender', 4, { owner: 'Company Claude' }),
     // 卡住
@@ -143,11 +145,10 @@ function build() {
       progress_state: 'active', progress_note: '還沒確認有沒有送出，請確認。', progress_updated_at: ago(26), progress_updated_by: 'Company Claude' }, 'tender', 5, {}),
     // 已完成（留在進行中 14 天）
     doing({ id: 'demo-a5', title: '品牌年度形象提案', org: '某食品公司', amount_label: '報價', amount_display: '68萬', created_at: ago(500),
-      folder_name: '10-28_品牌年度形象提案', folder_path: '/Users/Shared/公司工作區/10-28_品牌年度形象提案', notion_status: 'done', notion_url: SRC + 'notion-page-2',
-      progress_state: 'done', progress_outcome: 'submitted', progress_archive_at: iso(now + 12 * D), progress_note: '提案已送出，等對方回覆。', progress_updated_at: ago(48), progress_updated_by: 'Company Claude' }, 'pitch', 7, {}),
+      folder_name: '10-28_品牌年度形象提案', folder_path: '/Users/Shared/公司工作區/10-28_品牌年度形象提案', progress_state: 'done', progress_outcome: 'submitted', progress_archive_at: iso(now + 12 * D), progress_note: '提案已送出，等對方回覆。', progress_updated_at: ago(48), progress_updated_by: 'Company Claude' }, 'pitch', 7, {}),
     // 資料夾建立中
     doing({ id: 'demo-a6', title: '原住民族語動畫徵件', org: '原住民族委員會', amount_label: '補助上限', amount_display: '200萬', deadline: at(25, 17), created_at: ago(8),
-      source_url: SRC + 'active-6', source_site: '原民會官網', folder_status: 'building', folder_name: '11-16_原住民族語動畫徵件', notion_status: 'queued',
+      source_url: SRC + 'active-6', source_site: '原民會官網', folder_status: 'building', folder_name: '11-16_原住民族語動畫徵件',
       decided_at: iso(now - 2 * MIN), progress_updated_at: iso(now - 2 * MIN), progress_updated_by: 'system' }, 'grant', 1, {}),
     // 資料夾失敗
     doing({ id: 'demo-a7', title: '防災教育宣導影片', org: '某縣消防局', amount_label: '預算', amount_display: '52萬', deadline: at(8, 17), created_at: ago(30),
@@ -181,22 +182,24 @@ function build() {
     st('write_proposal', '撰寫企劃與估價', 'pending'), st('seal_and_bid', '用印與投標', 'pending'), st('result', '決標或結案', 'pending'),
   ];
   rows.push(pay);
-  // 已送件（像恆春那種）：seal_submit 已完成、公告截止日已過，目前在送件後的「資格審查」，下一個內部期限 3 天後
+  // 送件後（像恆春那種）：seal_submit 11/10 前後已完成、公告截止已過，目前在「評選簡報準備」，簡報期限 2 天後（v4 盯目前步驟與下一個里程碑）
+  //   ?mock=sentnodue  同一張卡沒有期限（簡報日期未定）
+  //   ?mock=sentcustom 目前步驟換成自訂鍵、沒有期限（只能靠 seal_submit 已完成判斷送件後）
+  const qflag = String(typeof location !== 'undefined' ? location.search : '');
   const sent = doing({ id: 'demo-a10', title: '恆春半島觀光推廣影片（示意）', short_title: '恆春觀光推廣影片', org: '某縣政府交通旅遊處', amount_label: '預算', amount_display: '120萬',
-    deadline: iso(now - 2 * D), created_at: ago(10 * 24), tender_method: '公開招標', source_url: SRC + 'active-10', source_site: '政府電子採購網',
+    deadline: iso(now - 4 * D), created_at: ago(12 * 24), tender_method: '公開招標', source_url: SRC + 'active-10', source_site: '政府電子採購網',
     folder_name: '11-06_恆春觀光推廣影片', folder_path: '/Users/Shared/公司工作區/11-06_恆春觀光推廣影片', progress_state: 'active',
-    progress_note: '標書已送出，等資格審查結果。', progress_updated_at: ago(3), progress_updated_by: 'Company Claude' }, 'tender', 1, {});
+    progress_note: '資格審查通過，進入評選，要準備簡報。', progress_updated_at: ago(3), progress_updated_by: 'Company Claude' }, 'tender', 1, {});
   sent.progress_steps = [
-    st('create_workspace', '建立工作區', 'done', { done_at: ago(9 * 24) }), st('read_tender_docs', '讀招標文件', 'done', { done_at: ago(8 * 24) }),
-    st('write_proposal', '撰寫企劃與估價', 'done', { done_at: ago(4 * 24) }), st('seal_submit', '用印與送件', 'done', { done_at: ago(2 * 24 + 3) }),
-    st('qualify', '資格審查', 'current', { due_at: iso(now + 3 * D), owner: '機關', note: '等機關通知資格審查結果' }),
-    st('pitch_prep', '簡報準備', 'pending'), st('pitch_present', '評選簡報', 'pending'), st('await_opening', '等待開標', 'pending'), st('result', '決標或結案', 'pending'),
+    st('create_workspace', '建立工作區', 'done', { done_at: ago(11 * 24) }), st('read_tender_docs', '讀招標文件', 'done', { done_at: ago(10 * 24) }),
+    st('write_proposal', '撰寫企劃與估價', 'done', { done_at: ago(8 * 24) }), st('seal_submit', '用印與送件', 'done', { done_at: ago(6 * 24) }),
+    st('qualify', '資格審查', 'done', { done_at: ago(20) }),
+    st('pitch_prep', '評選簡報準備', 'current', { due_at: qflag.includes('sentnodue') ? null : iso(now + 2 * D + 2 * H), owner: 'Company Claude', note: '簡報稿與分鏡要先給內審' }),
+    st('pitch_present', '評選簡報', 'pending'), st('await_opening', '等待開標', 'pending'), st('result', '決標或結案', 'pending'),
   ];
   rows.push(sent);
   // ?mock=sentcustom：同一張卡改成自訂步驟鍵、沒有內部期限，只能靠「seal_submit 已完成」判斷是已送件
-  if (String(typeof location !== 'undefined' ? location.search : '').includes('sentcustom')) {
-    sent.progress_steps[4] = st('wait_agency', '等機關通知', 'current', { owner: '機關' });
-  }
+  if (qflag.includes('sentcustom')) sent.progress_steps[5] = st('wait_agency', '等機關通知', 'current', { owner: '機關' });
   rows.filter(r => r.status === 'doing').forEach(r => {
     const st = r.progress_steps;
     if (r.progress_state === 'done') st.forEach(s => { if (s.status !== 'skipped') { s.status = 'done'; s.done_at = s.done_at || r.progress_updated_at; } });
@@ -215,7 +218,7 @@ function xssRows() {
     deadline: iso(now + 3 * D), deadline_text: XP, deadline_approx: true, created_at: iso(now - 2 * H), expire_at: iso(now + 3 * D),
     why: XP, quick: [XP, XP], facts: ['案號：' + XP, XP + '：' + XP, XP], warn: [XP], first_step: XP, fit: XP, found_by: XP,
     case_no: XP, tender_method: XP, bid_bond: XP, performance_period: XP, qualification: XP,
-    source_site: XP, source_url: 'javascript:window.__xss=98', notion_url: 'javascript:window.__xss=97', notion_status: 'done',
+    source_site: XP, source_url: 'javascript:window.__xss=98',
     crawl_status: 'none', crawl_error: XP, xss_error: XP, full_text: '', attachments: [{ name: XP, url: 'javascript:window.__xss=99' }, { name: '正常附件', url: 'https://example.org/ok.pdf' }],
     remind_at: null, stash_due_at: null, decided_at: null, drop_reason: null,
     folder_status: 'none', folder_name: null, folder_path: null, folder_error: null,
@@ -246,6 +249,12 @@ export function mockAdapter(modeStr) {
   let rows = flags.has('empty') ? [] : build();
   if (flags.has('emptylane')) rows = rows.filter(r => r.lane !== 'pitch' || r.status === 'doing');
   if (flags.has('noactive')) rows = rows.filter(r => r.status !== 'doing');
+  if (flags.has('live5')) {   // 重現線上 2026-11-16 的情況：進行中 5 張＝4 張卡住＋恆春（送件後，評選簡報準備）
+    rows = rows.filter(r => r.status !== 'doing' || r.id === 'demo-a2' || r.id === 'demo-a10');
+    const base = rows.find(r => r.id === 'demo-a2');
+    [['demo-b1', '城市行銷短片（示意）', '等機關回覆修改意見'], ['demo-b2', '文化節紀錄片（示意）', '等合作單位提供素材'], ['demo-b3', '博物館導覽影片（示意）', '等公司用印']].forEach(([id, title, why]) =>
+      rows.push(Object.assign(JSON.parse(JSON.stringify(base)), { id, title, short_title: null, progress_blocker: why, source_url: SRC + id })));
+  }
   if (flags.has('xss')) rows = rows.concat(xssRows().map(r => { if (r.status === 'doing') derive(r); return r; }));
   rows.forEach(r => { r.deadline_text = r.deadline_text || fmtTxt(r.deadline); r.deadline_approx = !!r.deadline_approx; });
   const listeners = new Set();
@@ -325,9 +334,9 @@ export function mockAdapter(modeStr) {
           derive(r);
           if (!realBuild) {
             // 後端 opp_build：示意卡不真的建資料夾，直接 folder_status = done
-            Object.assign(r, { folder_status: 'done', folder_path: '（示意資料，沒有建資料夾）', notion_status: 'skipped' });
+            Object.assign(r, { folder_status: 'done', folder_path: '（示意資料，沒有建資料夾）' });
           } else {
-            Object.assign(r, { folder_status: 'queued', folder_path: null, notion_status: 'queued' });
+            Object.assign(r, { folder_status: 'queued', folder_path: null });
             const slow = flags.has('folderslow');
             setTimeout(() => { if (r.status === 'doing') { r.folder_status = 'building'; ping(); } }, slow ? 4000 : 1500);
             setTimeout(() => {

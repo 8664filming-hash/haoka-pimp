@@ -1,6 +1,6 @@
 // 好咖皮條客主程式：狀態、畫面、事件。只透過 adapter.js 取得與寫入資料。版面規格見交接包 DESIGN.md。
-import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl } from './adapter.js?v3';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
-import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v3';
+import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl } from './adapter.js?v4';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
+import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v4';
 
 const $ = s => document.querySelector(s);
 const LANES = [
@@ -42,6 +42,11 @@ const PAY_STEP = 'pay_approval';   // 等待付款同意（領標付款）
 // 清單之後流程改名，只改這兩行。
 const SUBMIT_KEYS = ['seal_submit', 'seal_and_bid', 'submit'];
 const POST_SUBMIT_KEYS = ['qualify', 'pitch_prep', 'pitch_present', 'await_opening', 'under_review', 'result'];
+// 送件後盯的是「目前這一步」與「下一個里程碑」（v4）。里程碑短名：步驟鍵對得到就用短名，對不到就用步驟名稱。
+const MILESTONE = { pitch_prep: '簡報', pitch_present: '簡報', qualify: '資格審查', await_opening: '開標', under_review: '審查結果', result: '結果' };
+const milestone = it => MILESTONE[it.progressStageKey] || it.progressStage || '下一步';
+const submitStep = it => it.progressSteps && it.progressSteps.find(x => SUBMIT_KEYS.includes(x.key) && (x.status === 'done' || x.status === 'skipped'));
+const sentTag = it => { const s = submitStep(it); return '已送件' + (s && s.doneAt ? ' ' + fmtDay(s.doneAt).replace(/（.）$/, '') : ''); };   // 例：已送件 11/10
 function submitted(it) {
   if (it.status !== 'doing' || it.progressStatus === 'done') return false;
   if (POST_SUBMIT_KEYS.includes(it.progressStageKey)) return true;
@@ -89,7 +94,7 @@ const S = {
   sheet: false, drawer: null,   // drawer = {id, view:'preview'|'full'|'progress'}
   detail: new Map(),   // id → {busy, timedOut, t0}
   prog: new Map(),     // id → {busy, at}：進度步驟抓過的版本（progressUpdatedAt）
-  textOpen: new Set(), fresh: new Set(),
+  textOpen: new Set(), attOpen: new Set(), fresh: new Set(),   // attOpen：附件清單展開中的卡（重畫時保留）
 };
 let api, lastFocus = null, depth = 0, ignorePop = false;
 const locks = new Set(), mutDone = {};
@@ -114,7 +119,7 @@ const homeLane = it => INBOX_LANES.includes(it.lane) ? it.lane : FALLBACK_LANE; 
 function target(it) {
   if (it.status === 'doing') {
     if (it.progressStatus === 'done' && it.progressArchiveAt) return { kind: 'arch', at: it.progressArchiveAt };
-    if (submitted(it)) return it.progressDueAt ? { kind: 'due', at: it.progressDueAt } : { kind: 'sub', at: Infinity };   // 已送件：看下一個內部期限
+    if (submitted(it)) return it.progressDueAt ? { kind: 'due', at: it.progressDueAt } : { kind: 'tbd', at: Infinity };   // 送件後：盯下一個里程碑（目前步驟的期限）
     return it.deadline ? { kind: 'dl', at: it.deadline } : { kind: 'none', at: Infinity };   // 進行中不會被收走，只看公告截止
   }
   if (it.deadline && (!it.expiresAt || it.deadline <= it.expiresAt)) return { kind: 'dl', at: it.deadline };
@@ -125,7 +130,9 @@ const vanishAt = it => target(it).at;
 function lvOf(it) {
   const t = target(it), m = t.at - tnow();
   if (t.kind === 'dl') return m < URGENT_DAYS * D ? 'hot' : m < 7 * D ? 'warm' : 'calm';   // 紅色只給真的截止日
-  if (t.kind === 'ttl' || t.kind === 'due') return m < D ? 'warm' : 'calm';   // 內部期限不亮紅
+  if (t.kind === 'due') return m < URGENT_DAYS * D ? 'hot' : m < 7 * D ? 'warm' : 'calm';   // 送件後的里程碑：照截止日的顏色規則，4 天內紅色
+  if (t.kind === 'tbd') return 'warm';                                                       // 日期未定：暖色提醒
+  if (t.kind === 'ttl') return m < D ? 'warm' : 'calm';
   return 'calm';
 }
 const approx = it => !!it.deadlineApprox && !!it.deadline;   // finder 只知道大概日期（deadline_approx = true）
@@ -133,8 +140,8 @@ const APPROX_NOTE = '（時間以公告為準）';
 function cdShort(it) {
   const t = target(it), m = t.at - tnow();
   if (t.kind === 'none') return '<span class="nodl">沒寫截止日</span>';
-  if (t.kind === 'sub') return '<span class="nodl sent">已送件</span>';
-  if (t.kind === 'due') return '<b>' + (m <= 0 ? '這步逾期' : shortLeft(m)) + '</b>' + (m <= 0 ? '' : ' 內部期限');
+  if (t.kind === 'tbd') return '<span class="nodl tbd">' + esc(milestone(it)) + '日期未定</span>';
+  if (t.kind === 'due') return '<b>' + (m <= 0 ? '已逾期' : shortLeft(m)) + '</b> ' + esc(milestone(it));
   if (t.kind === 'dl') return '<b>' + (m <= 0 ? '時間到' : (approx(it) ? '約 ' : '') + shortLeft(m)) + '</b>' + (m <= 0 ? '' : ' 截止');
   if (t.kind === 'arch') return '<b>' + (m <= 0 ? '即將' : shortLeft(m)) + '</b> ' + (m <= 0 ? '撤下' : '後撤下');
   return '<b>' + (m <= 0 ? '即將' : shortLeft(m)) + '</b> ' + (m <= 0 ? '收走' : '後收走');
@@ -142,8 +149,8 @@ function cdShort(it) {
 function cdFull(it) {
   const t = target(it), m = t.at - tnow();
   if (t.kind === 'none') return '沒寫';
-  if (t.kind === 'sub') return '已送件';
-  if (m <= 0) return t.kind === 'dl' ? '時間到' : t.kind === 'due' ? '這步逾期' : t.kind === 'arch' ? '即將撤下' : '即將收走';
+  if (t.kind === 'tbd') return '日期未定';
+  if (m <= 0) return t.kind === 'dl' ? '時間到' : t.kind === 'due' ? '已逾期' : t.kind === 'arch' ? '即將撤下' : '即將收走';
   return (t.kind === 'dl' && approx(it) ? '約 ' : '') + fmtLeft(m);
 }
 function cdLine(it) {            // 待決區用：「剩 6 天 5 小時 截止」
@@ -180,7 +187,12 @@ function pv(it) {
   if (ps === 'failed') return { k: 'failed', badge: it.folderStatus === 'failed' ? '資料夾沒建成' : '流程失敗', cls: 'pst-hot', bar: 'hot', alert: 'stuck' };
   if (ps === 'done') return { k: 'done', badge: '已完成', cls: 'pst-done', bar: 'ok' };
   if (ps === 'blocked') return { k: 'blocked', badge: '卡住', cls: 'pst-block', bar: 'warm', alert: 'stuck' };
-  if (submitted(it)) return { k: 'sent', badge: '已送件', cls: 'pst-on', bar: 'calm' };   // 送件後：不看公告截止、不亮紅、不算異常
+  if (submitted(it)) {   // 送件後：不看公告截止；盯目前步驟的期限（4 天內或逾期算異常，日期未定不算）
+    const d = it.progressDueAt;
+    if (d && d <= now) return { k: 'sent', badge: '這步逾期', cls: 'pst-hot', bar: 'hot', alert: 'late', sent: true };
+    if (d && d - now < URGENT_DAYS * D) return { k: 'sent', badge: '即將到期', cls: 'pst-hot', bar: 'hot', alert: 'late', sent: true };
+    return { k: 'sent', badge: '進行中', cls: 'pst-on', bar: 'calm', sent: true };
+  }
   if (ps === 'overdue') return { k: 'overdue', badge: '這步逾期', cls: 'pst-hot', bar: 'hot', alert: 'late' };
   if (dlPassed) return { k: 'dlpass', badge: '截止已到', cls: 'pst-hot', bar: 'hot', alert: 'late' };
   if (ps === 'queued') return { k: 'queued', badge: '建立工作區中', cls: 'pst-on', bar: 'calm' };
@@ -233,12 +245,19 @@ function renderSummary() {
   $('#sum').innerHTML = S.hadData ? '<b>' + live + '</b> 筆待看' + (act ? '<span class="sep"> · </span><b>' + act + '</b> 筆進行中' : '') + (hot ? '<br><span class="hotn">' + hot + ' 筆</span> ' + URGENT_DAYS + ' 天內截止' : '') : '';
 }
 function anomalyText() {
-  const a = activeItems().map(pv);
+  const act = activeItems(), a = act.map(pv);
   const stuck = a.filter(p => p.alert === 'stuck').length, late = a.filter(p => p.alert === 'late').length;
   const parts = [];
   if (stuck) parts.push(stuck + ' 筆卡住');
   if (late) parts.push(late + ' 筆即將逾期或已逾期');
-  return parts.length ? '有 ' + parts.join('、') + '的進行中案子。' : '';
+  // 送件後的卡：目前步驟 4 天內到期、逾期或卡住，點名寫出來，例如「恆春觀光推廣影片：簡報 2 天後」（日期未定的不算）
+  const named = act.filter((it, i) => submitted(it) && a[i].alert).slice(0, 2).map(it => {
+    const d = it.progressDueAt, m = d ? d - tnow() : 0;
+    const when = pv(it).k === 'blocked' ? '卡住' : !d ? '' : m <= 0 ? '已逾期' : shortLeft(m) + '後';
+    return nm(it) + '：' + milestone(it) + (when ? ' ' + when : '');
+  });
+  // 先寫進行中總數（送件後的卡也算），再寫其中幾筆異常，避免把「4 筆卡住」看成「只有 4 筆進行中」
+  return parts.length ? '進行中 ' + act.length + ' 筆，其中 ' + parts.join('、') + '。' + (named.length ? named.join('；') + '。' : '') : '';
 }
 // 通知列一次只放一則：金鑰失效＞離線＞載入過慢＞進行中異常（DESIGN.md 第一節）
 function renderNotice() {
@@ -293,9 +312,14 @@ function acard(it) {
   else if (folderWait(it)) meta = '<p class="meta-line"><span class="spin"></span>' + folderWaitText(it) + '</p>';
   else if (p.k === 'done') meta = '<p class="meta-line">已完成' + (OUTCOME[it.progressOutcome] ? '：<b>' + OUTCOME[it.progressOutcome] + '</b>' : '') + (it.progressUpdatedAt ? '，<span data-rel="' + it.progressUpdatedAt + '">' + relTime(it.progressUpdatedAt, tnow()) + '</span>' : '') + '</p>';
   else meta = '<p class="meta-line">' + byLine(it.progressUpdatedAt, it.progressUpdatedBy) + '</p>';
-  return '<article class="card b-active' + (S.fresh.has(it.id) ? ' fresh' : '') + '" data-id="' + id + '" data-pst="' + p.bar + '" data-lvl="' + lv + '" tabindex="0" aria-label="' + esc(it.title) + '，' + p.badge + '">' +
-    '<div class="c1"><span class="tm" data-cd="' + id + '" data-mode="short" data-lvl="' + lv + '">' + cdShort(it) + '</span>' + demo(it) + '</div>' +
-    '<p class="stage"><b>' + esc(it.progressStage || '建立工作區') + '</b><span class="pst ' + p.cls + '">' + p.badge + '</span></p>' +
+  const sent = submitted(it);
+  // 送件後（v4）：左上大字是目前步驟、旁邊狀態徽章；下一行倒數盯下一個里程碑，「已送件 11/10」縮成小標籤
+  const top = sent
+    ? '<div class="c1 sent-top"><span class="step-big sb">' + softBreak(it.progressStage || '下一步') + '</span><span class="pst ' + p.cls + '">' + p.badge + '</span>' + demo(it) + '</div>' +
+      '<p class="stage sent-row"><span class="tm" data-cd="' + id + '" data-mode="short" data-lvl="' + lv + '">' + cdShort(it) + '</span><span class="sent-tag">' + esc(sentTag(it)) + '</span></p>'
+    : '<div class="c1"><span class="tm" data-cd="' + id + '" data-mode="short" data-lvl="' + lv + '">' + cdShort(it) + '</span>' + demo(it) + '</div>' +
+      '<p class="stage"><b>' + esc(it.progressStage || '建立工作區') + '</b><span class="pst ' + p.cls + '">' + p.badge + '</span></p>';
+  return '<article class="card b-active' + (S.fresh.has(it.id) ? ' fresh' : '') + '" data-id="' + id + '" data-pst="' + p.bar + '" data-lvl="' + lv + '" tabindex="0" aria-label="' + esc(it.title) + '，' + p.badge + '">' + top +
     cardOrg(it) + '<h3 class="sb">' + softBreak(it.title) + '</h3>' +
     '<div class="prog-row"><div class="pbar" aria-hidden="true"><i style="width:' + pct(it) + '%"></i></div><span class="frac">' + fracText(it) + '</span></div>' +
     meta + '<div class="ca">' + (payUrl(it) ? '<a class="go go-wide pay-link" href="' + esc(payUrl(it)) + '" target="_blank" rel="noopener noreferrer" aria-label="「' + esc(nm(it)) + '」去領標付款">去領標付款</a>' : '') +
@@ -438,7 +462,10 @@ function crawlHTML(it) {
   const id = esc(it.id);
   if (it.detailText) {
     const open = S.textOpen.has(it.id);
-    const att = it.attachments.length ? '<div class="att"><h3>附件</h3><ul>' + it.attachments.map(a => '<li><a href="' + esc(a.url) + '" target="_blank" rel="noopener noreferrer">' + esc(a.name || a.url) + '</a></li>').join('') + '</ul></div>' : '';
+    // 附件預設收合成一列「附件 N 個 ▸」，點了才展開（數量少也一樣收合）
+    const ao = S.attOpen.has(it.id), n = it.attachments.length;
+    const att = n ? '<div class="att"><button class="att-toggle" data-act="toggle-att" data-id="' + id + '" type="button" aria-expanded="' + ao + '" aria-controls="att-' + id + '">附件 ' + n + ' 個 <span aria-hidden="true">' + (ao ? '▾' : '▸') + '</span></button>' +
+      '<ul id="att-' + id + '"' + (ao ? '' : ' hidden') + '>' + it.attachments.map(a => '<li><a href="' + esc(a.url) + '" target="_blank" rel="noopener noreferrer">' + esc(a.name || a.url) + '</a></li>').join('') + '</ul></div>' : '';
     return '<section class="dt-sec dt-text"><h3>公告全文</h3><div class="txt' + (open ? ' open' : '') + '">' + para(it.detailText) + '</div>' +
       '<button class="more" data-act="toggle-text" data-id="' + id + '" type="button">' + (open ? '收合全文' : '展開全文') + '</button>' + att + '</section>';
   }
@@ -505,8 +532,9 @@ function folderRow(it) {
   if (fs === 'failed') return '<div class="fold-row bad"><p class="fold-t"><span class="ok-ic bad" aria-hidden="true">!</span>資料夾沒建成</p><p class="fold-p">' + esc(it.folderError || '原因不明') + '</p><p class="fold-p">' + TBD.folderFailHelp + '</p></div>';
   if (folderWait(it)) return '<div class="fold-row"><p class="fold-t"><span class="spin"></span>' + folderWaitText(it) + '</p><p class="fold-p">通常 1 到 2 分鐘內建好，附件多會久一點。你可以先回到面板，不用等。</p></div>';
   const p = it.folderPath, real = /^\//.test(p);
-  // 「複製資料夾位置」「開啟 Notion 頁」照 DESIGN 放在底欄（D 審稿 #10），這裡只寫狀態與路徑
-  const notion = !it.notionUrl && ['queued', 'building'].includes(it.notionStatus) ? '<p class="prog-upd">Notion 頁建立中</p>' : '';
+  // 「複製本機資料夾位置」照 DESIGN 放在底欄（D 審稿 #10），這裡只寫狀態與路徑。
+  // 面板不顯示 Notion（2026-11-16 定案：「面板不標明notion頁面」）；adapter 照收 notion 欄位，但畫面一律不畫。
+  const notion = '';
   if (!real) return '<div class="fold-row"><p class="prog-upd">這張是示意卡，不會真的建資料夾。</p>' + (p || it.folderName ? '<div class="path">' + esc(it.folderName || p) + '</div>' : '') + notion + '</div>';
   return '<div class="fold-row"><p class="prog-upd">工作資料夾已建立' + (it.isDemo ? '（示意路徑）' : '') + '</p><div class="path">' + esc(p) + '</div>' + notion + '</div>';
 }
@@ -521,7 +549,14 @@ function progressBox(it) {
     : st ? '<p class="prog-upd">還沒有步驟清單。</p>'
     : '<div class="crawl-sk" aria-hidden="true"><i class="sk"></i><i class="sk"></i><i class="sk"></i></div>' + (busy ? '' : '');
   let warnLine = '';
-  if (p.k === 'blocked') warnLine = '<p class="prog-alert warm">卡住：' + esc(it.progressBlocker || '原因沒寫') + '</p>';
+  if (submitted(it)) {   // 送件後（v4）：先寫下一步與期限，下面才是已送件
+    const d = it.progressDueAt, m = d ? d - tnow() : 0;
+    const when = !d ? '日期未定' : (m <= 0 ? '已逾期，' : shortLeft(m) + '後，') + fmtDate(d) + ' 前';
+    warnLine = '<p class="prog-alert next ' + (d ? (m < URGENT_DAYS * D ? 'hot' : 'calm') : 'warm') + '">下一步：' + esc(it.progressStage || '下一步') + '（' + esc(when) + '）</p>' +
+      (p.k === 'blocked' ? '<p class="prog-alert warm">卡住：' + esc(it.progressBlocker || '原因沒寫') + '</p>' : '') +
+      '<p class="prog-upd sent-line">' + esc(sentTag(it)) + (it.deadline ? '（公告截止 ' + esc(it.deadlineText || fmtDate(it.deadline)) + '）' : '') + '</p>';
+  }
+  else if (p.k === 'blocked') warnLine = '<p class="prog-alert warm">卡住：' + esc(it.progressBlocker || '原因沒寫') + '</p>';
   else if (p.k === 'overdue') warnLine = '<p class="prog-alert hot">這步逾期：' + esc(it.progressBlocker || '這步已過內部期限') + '</p>';
   else if (p.k === 'dlpass') warnLine = '<p class="prog-alert hot">公告截止時間已到（' + esc(it.deadlineText || fmtDate(it.deadline)) + '）。面板不會自動收走，請確認是否已送出。</p>';
   else if (p.k === 'failed' && it.folderStatus === 'failed') warnLine = '<p class="prog-alert hot">資料夾沒建成：' + esc(it.folderError || '原因不明') + '。' + TBD.progressFailHelp + '</p>';
@@ -538,12 +573,11 @@ function progressBox(it) {
 function progressHTML(it) {
   const p = pv(it), t = target(it);
   const sent = submitted(it);
-  const dl = sent ? '已送件' + (it.deadline ? '（公告截止 ' + esc(it.deadlineText || fmtDate(it.deadline)) + '）' : '')
-    : it.deadline ? '截止 ' + esc(it.deadlineText || fmtDate(it.deadline)) + (approx(it) ? APPROX_NOTE : '') : '沒寫截止日';
+  const dl = sent ? '' : it.deadline ? '截止 ' + esc(it.deadlineText || fmtDate(it.deadline)) + (approx(it) ? APPROX_NOTE : '') : '沒寫截止日';
   const left = t.kind === 'dl' ? '<br><span data-cd="' + esc(it.id) + '" data-lvl="' + lvOf(it) + '" class="dl-left">' + cdFull(it) + '</span>' + (it.deadline > tnow() ? ' 後截止' : '')
-    : t.kind === 'due' ? '<br>下一個內部期限：' + fmtDate(it.progressDueAt) + '（<span data-cd="' + esc(it.id) + '" data-lvl="' + lvOf(it) + '" class="dl-left">' + cdFull(it) + '</span>）' : '';
+    : '';
   return '<div class="dt">' + head(it, '<span class="pst ' + p.cls + '">' + p.badge + '</span>') +
-    '<p class="dt-line">' + esc(amtText(it)) + ' · ' + dl + left + '</p>' +
+    '<p class="dt-line">' + esc(amtText(it)) + (dl ? ' · ' + dl : '') + left + '</p>' +
     progressBox(it) + structBox(it, false) +
     (it.why ? '<p class="dt-why sbp">' + softBreak(it.why) + '</p>' : '') + warnBox(it.warn) + crawlHTML(it) + factsBox(it) +
     '<section class="dt-sec dt-src"><h3>來源</h3>' + metaLine(it) + link(it) + '</section></div>';
@@ -558,8 +592,7 @@ function renderDrawer() {
     label = '進行中的進度';
     body = progressHTML(it);
     const canCopy = it.folderStatus === 'done' && /^\//.test(it.folderPath);
-    const btns = (canCopy ? '<button class="btn btn-primary" data-act="copy-path" data-id="' + id + '" type="button">複製資料夾位置</button>' : '') +
-      (it.notionUrl ? '<a class="btn btn-ghost" href="' + esc(it.notionUrl) + '" target="_blank" rel="noopener noreferrer">開啟 Notion 頁</a>' : '') +
+    const btns = (canCopy ? '<button class="btn btn-primary" data-act="copy-path" data-id="' + id + '" type="button">複製本機資料夾位置</button>' : '') +
       '<button class="btn ' + (canCopy ? 'btn-ghost' : 'btn-primary') + '" data-act="close-drawer" type="button">回到面板</button>';
     foot = '<div class="df prog-foot">' + btns + '</div>';
   } else if (view === 'full') {
@@ -766,6 +799,7 @@ async function ensureProgress(id, force) {
   if (get(id) && laneOf(get(id)) === 'active') renderBoard();   // 卡片上的付款鈕、已送件判斷都可能因步驟而變
 }
 
+
 // ---------------- 讀取：快照、逾時、輪詢、即時 ----------------
 // 開頁時算一次：金鑰失效後 KEY 會被清空，要靠這個值刪掉那把金鑰的快照（D 審稿 #7）
 let SNAP = '';
@@ -820,7 +854,7 @@ async function refresh() {
     // 停在「等待付款同意」又沒有 pay 連結的卡（備援）：opp_list 不帶步驟備註，背景補抓一次，卡片上才畫得出「去領標付款」
     items().filter(i => laneOf(i) === 'active' && i.progressStageKey === PAY_STEP && !linkOf(i, 'pay')).forEach(i => ensureProgress(i.id));
     // 公告截止已過、目前步驟又不在送件後清單的卡：要看步驟（seal_submit 是否完成）才知道是不是已送件，背景補抓一次
-    items().filter(i => laneOf(i) === 'active' && i.deadline && i.deadline <= tnow() && !POST_SUBMIT_KEYS.includes(i.progressStageKey) && i.progressStatus !== 'done').forEach(i => ensureProgress(i.id));
+    items().filter(i => laneOf(i) === 'active' && i.progressStatus !== 'done' && (submitted(i) || (i.deadline && i.deadline <= tnow() && !POST_SUBMIT_KEYS.includes(i.progressStageKey)))).forEach(i => ensureProgress(i.id));   // 送件後的卡也要步驟（「已送件 11/10」的日期）
   } catch (e) {
     if (e instanceof AdapterError && e.kind === 'auth') setAuth(); else S.net = 'offline';
   } finally {
@@ -848,7 +882,7 @@ const ping = () => { clearTimeout(pingT); pingT = setTimeout(refresh, 150); };
 // ---------------- 事件 ----------------
 function copyPath(id) {
   const it = get(id); if (!it || !it.folderPath) return;
-  const ok = () => toast('已複製位置'), no = () => toast('這個瀏覽器不讓複製，請長按路徑自己複製', { bad: true });
+  const ok = () => toast('已複製本機資料夾位置'), no = () => toast('這個瀏覽器不讓複製，請長按路徑自己複製', { bad: true });
   // 備援：剪貼簿 API 不能用或被拒（http、內嵌瀏覽器、舊瀏覽器）時，改用隱藏文字框複製
   const legacy = () => {
     const back = document.activeElement;
@@ -881,6 +915,7 @@ document.addEventListener('click', e => {
       case 'retry': refresh(); break;
       case 'retry-detail': ensureDetail(id, true); break;
       case 'toggle-text': S.textOpen.has(id) ? S.textOpen.delete(id) : S.textOpen.add(id); renderDrawer(); break;
+      case 'toggle-att': S.attOpen.has(id) ? S.attOpen.delete(id) : S.attOpen.add(id); renderDrawer(); $('#drawer [data-act=toggle-att]')?.focus({ preventScroll: true }); break;
       case 'close-drawer': closeDrawer(); break;
       case 'close-hold': closeSheet(); break;
       case 'open-hold': openSheet(); break;
