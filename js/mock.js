@@ -11,6 +11,7 @@
 //   demote       第一次 opp_whoami 是 operator，之後變 viewer，寫入一律回權限不足（模擬金鑰被降權）
 //   authlater    第一次列表成功，之後一律金鑰失效（看失效後停輪詢、清快照）
 //   debug        在 window 上放 __mockListCalls（列表被呼叫幾次）、__mockPing()（模擬 realtime ping）、__mockListeners（訂閱數）
+//   sentcustom   已送件示意卡改用自訂步驟鍵、沒有內部期限（測「seal_submit 已完成」那條判斷）
 //   xss          多放幾張每個文字欄都塞 HTML、網址是 javascript: 的測試卡，確認畫面全部當文字顯示
 //   slow         列表 6 秒後才回來（看「載入比較久」）
 //   hang         列表一直不回來（看載入中與逾時）
@@ -23,7 +24,7 @@
 //   realbuild    要做之後照真卡流程：排隊 → 建立中 → 建好（看 3 秒快輪詢與第 1 步自動完成）
 //   folderslow   同 realbuild，但 12 秒後才建好
 //   live         9 秒後進來一張新卡（看新進光暈與 toast）
-import { AdapterError, normalize } from './adapter.js?v2';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
+import { AdapterError, normalize } from './adapter.js?v3';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
 
 const H = 3600e3, D = 24 * H, MIN = 60e3;
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -180,6 +181,22 @@ function build() {
     st('write_proposal', '撰寫企劃與估價', 'pending'), st('seal_and_bid', '用印與投標', 'pending'), st('result', '決標或結案', 'pending'),
   ];
   rows.push(pay);
+  // 已送件（像恆春那種）：seal_submit 已完成、公告截止日已過，目前在送件後的「資格審查」，下一個內部期限 3 天後
+  const sent = doing({ id: 'demo-a10', title: '恆春半島觀光推廣影片（示意）', short_title: '恆春觀光推廣影片', org: '某縣政府交通旅遊處', amount_label: '預算', amount_display: '120萬',
+    deadline: iso(now - 2 * D), created_at: ago(10 * 24), tender_method: '公開招標', source_url: SRC + 'active-10', source_site: '政府電子採購網',
+    folder_name: '11-06_恆春觀光推廣影片', folder_path: '/Users/Shared/公司工作區/11-06_恆春觀光推廣影片', progress_state: 'active',
+    progress_note: '標書已送出，等資格審查結果。', progress_updated_at: ago(3), progress_updated_by: 'Company Claude' }, 'tender', 1, {});
+  sent.progress_steps = [
+    st('create_workspace', '建立工作區', 'done', { done_at: ago(9 * 24) }), st('read_tender_docs', '讀招標文件', 'done', { done_at: ago(8 * 24) }),
+    st('write_proposal', '撰寫企劃與估價', 'done', { done_at: ago(4 * 24) }), st('seal_submit', '用印與送件', 'done', { done_at: ago(2 * 24 + 3) }),
+    st('qualify', '資格審查', 'current', { due_at: iso(now + 3 * D), owner: '機關', note: '等機關通知資格審查結果' }),
+    st('pitch_prep', '簡報準備', 'pending'), st('pitch_present', '評選簡報', 'pending'), st('await_opening', '等待開標', 'pending'), st('result', '決標或結案', 'pending'),
+  ];
+  rows.push(sent);
+  // ?mock=sentcustom：同一張卡改成自訂步驟鍵、沒有內部期限，只能靠「seal_submit 已完成」判斷是已送件
+  if (String(typeof location !== 'undefined' ? location.search : '').includes('sentcustom')) {
+    sent.progress_steps[4] = st('wait_agency', '等機關通知', 'current', { owner: '機關' });
+  }
   rows.filter(r => r.status === 'doing').forEach(r => {
     const st = r.progress_steps;
     if (r.progress_state === 'done') st.forEach(s => { if (s.status !== 'skipped') { s.status = 'done'; s.done_at = s.done_at || r.progress_updated_at; } });

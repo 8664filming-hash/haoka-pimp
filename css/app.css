@@ -483,3 +483,5 @@ p,li{text-wrap:pretty}
 @keyframes swr{from{transform:translateX(-40px);opacity:.35}to{transform:none;opacity:1}}
 .lane.swipe-l{animation:swl .22s cubic-bezier(.2,.8,.2,1)}
 .lane.swipe-r{animation:swr .22s cubic-bezier(.2,.8,.2,1)}
+/* 已送件的進行中卡：倒數那格沒有內部期限時寫「已送件」 */
+.tm .nodl.sent{color:var(--ok);font-size:16px;font-weight:800}

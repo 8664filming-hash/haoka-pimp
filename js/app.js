@@ -1,6 +1,6 @@
 // 好咖皮條客主程式：狀態、畫面、事件。只透過 adapter.js 取得與寫入資料。版面規格見交接包 DESIGN.md。
-import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl } from './adapter.js?v2';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
-import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v2';
+import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl } from './adapter.js?v3';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
+import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v3';
 
 const $ = s => document.querySelector(s);
 const LANES = [
@@ -37,6 +37,16 @@ const TENDER_ADMIN = '政府標案由管理員決定要不要做';   // sql/21�
 const OUTCOME = { submitted: '已送件', won: '得標或核定', lost: '未得標', withdrawn: '撤件放棄' };
 // ----- 步驟備註裡的網址 → 按鈕（只收 http(s)，經過 adapter 的 safeUrl） -----
 const PAY_STEP = 'pay_approval';   // 等待付款同意（領標付款）
+// ----- 已送件：送件之後不再看公告截止日（不顯示「截止已到／時間到」、不亮紅、不算進行中異常），倒數改看下一個內部期限 -----
+// 判斷：送件那一步（seal_submit；預設步驟的 seal_and_bid、submit 同義）已完成或略過，或目前步驟的鍵在送件後清單裡。
+// 清單之後流程改名，只改這兩行。
+const SUBMIT_KEYS = ['seal_submit', 'seal_and_bid', 'submit'];
+const POST_SUBMIT_KEYS = ['qualify', 'pitch_prep', 'pitch_present', 'await_opening', 'under_review', 'result'];
+function submitted(it) {
+  if (it.status !== 'doing' || it.progressStatus === 'done') return false;
+  if (POST_SUBMIT_KEYS.includes(it.progressStageKey)) return true;
+  return !!(it.progressSteps && it.progressSteps.some(x => SUBMIT_KEYS.includes(x.key) && (x.status === 'done' || x.status === 'skipped')));
+}
 const URL_RE = /https?:\/\/[^\s<>"'，。、；！？）」』】]+/i;
 const noteUrl = note => { const m = String(note || '').match(URL_RE); return m ? safeUrl(m[0].replace(/[.,;:!?)\]]+$/, '')) : ''; };
 const noteText = note => String(note || '').replace(URL_RE, '').replace(/[：:\s]+$/, '').trim();   // 網址畫成按鈕後，備註只留文字
@@ -104,6 +114,7 @@ const homeLane = it => INBOX_LANES.includes(it.lane) ? it.lane : FALLBACK_LANE; 
 function target(it) {
   if (it.status === 'doing') {
     if (it.progressStatus === 'done' && it.progressArchiveAt) return { kind: 'arch', at: it.progressArchiveAt };
+    if (submitted(it)) return it.progressDueAt ? { kind: 'due', at: it.progressDueAt } : { kind: 'sub', at: Infinity };   // 已送件：看下一個內部期限
     return it.deadline ? { kind: 'dl', at: it.deadline } : { kind: 'none', at: Infinity };   // 進行中不會被收走，只看公告截止
   }
   if (it.deadline && (!it.expiresAt || it.deadline <= it.expiresAt)) return { kind: 'dl', at: it.deadline };
@@ -114,7 +125,7 @@ const vanishAt = it => target(it).at;
 function lvOf(it) {
   const t = target(it), m = t.at - tnow();
   if (t.kind === 'dl') return m < URGENT_DAYS * D ? 'hot' : m < 7 * D ? 'warm' : 'calm';   // 紅色只給真的截止日
-  if (t.kind === 'ttl') return m < D ? 'warm' : 'calm';
+  if (t.kind === 'ttl' || t.kind === 'due') return m < D ? 'warm' : 'calm';   // 內部期限不亮紅
   return 'calm';
 }
 const approx = it => !!it.deadlineApprox && !!it.deadline;   // finder 只知道大概日期（deadline_approx = true）
@@ -122,6 +133,8 @@ const APPROX_NOTE = '（時間以公告為準）';
 function cdShort(it) {
   const t = target(it), m = t.at - tnow();
   if (t.kind === 'none') return '<span class="nodl">沒寫截止日</span>';
+  if (t.kind === 'sub') return '<span class="nodl sent">已送件</span>';
+  if (t.kind === 'due') return '<b>' + (m <= 0 ? '這步逾期' : shortLeft(m)) + '</b>' + (m <= 0 ? '' : ' 內部期限');
   if (t.kind === 'dl') return '<b>' + (m <= 0 ? '時間到' : (approx(it) ? '約 ' : '') + shortLeft(m)) + '</b>' + (m <= 0 ? '' : ' 截止');
   if (t.kind === 'arch') return '<b>' + (m <= 0 ? '即將' : shortLeft(m)) + '</b> ' + (m <= 0 ? '撤下' : '後撤下');
   return '<b>' + (m <= 0 ? '即將' : shortLeft(m)) + '</b> ' + (m <= 0 ? '收走' : '後收走');
@@ -129,7 +142,8 @@ function cdShort(it) {
 function cdFull(it) {
   const t = target(it), m = t.at - tnow();
   if (t.kind === 'none') return '沒寫';
-  if (m <= 0) return t.kind === 'dl' ? '時間到' : t.kind === 'arch' ? '即將撤下' : '即將收走';
+  if (t.kind === 'sub') return '已送件';
+  if (m <= 0) return t.kind === 'dl' ? '時間到' : t.kind === 'due' ? '這步逾期' : t.kind === 'arch' ? '即將撤下' : '即將收走';
   return (t.kind === 'dl' && approx(it) ? '約 ' : '') + fmtLeft(m);
 }
 function cdLine(it) {            // 待決區用：「剩 6 天 5 小時 截止」
@@ -166,6 +180,7 @@ function pv(it) {
   if (ps === 'failed') return { k: 'failed', badge: it.folderStatus === 'failed' ? '資料夾沒建成' : '流程失敗', cls: 'pst-hot', bar: 'hot', alert: 'stuck' };
   if (ps === 'done') return { k: 'done', badge: '已完成', cls: 'pst-done', bar: 'ok' };
   if (ps === 'blocked') return { k: 'blocked', badge: '卡住', cls: 'pst-block', bar: 'warm', alert: 'stuck' };
+  if (submitted(it)) return { k: 'sent', badge: '已送件', cls: 'pst-on', bar: 'calm' };   // 送件後：不看公告截止、不亮紅、不算異常
   if (ps === 'overdue') return { k: 'overdue', badge: '這步逾期', cls: 'pst-hot', bar: 'hot', alert: 'late' };
   if (dlPassed) return { k: 'dlpass', badge: '截止已到', cls: 'pst-hot', bar: 'hot', alert: 'late' };
   if (ps === 'queued') return { k: 'queued', badge: '建立工作區中', cls: 'pst-on', bar: 'calm' };
@@ -522,8 +537,11 @@ function progressBox(it) {
 }
 function progressHTML(it) {
   const p = pv(it), t = target(it);
-  const dl = it.deadline ? '截止 ' + esc(it.deadlineText || fmtDate(it.deadline)) + (approx(it) ? APPROX_NOTE : '') : '沒寫截止日';
-  const left = t.kind === 'dl' ? '<br><span data-cd="' + esc(it.id) + '" data-lvl="' + lvOf(it) + '" class="dl-left">' + cdFull(it) + '</span>' + (it.deadline > tnow() ? ' 後截止' : '') : '';
+  const sent = submitted(it);
+  const dl = sent ? '已送件' + (it.deadline ? '（公告截止 ' + esc(it.deadlineText || fmtDate(it.deadline)) + '）' : '')
+    : it.deadline ? '截止 ' + esc(it.deadlineText || fmtDate(it.deadline)) + (approx(it) ? APPROX_NOTE : '') : '沒寫截止日';
+  const left = t.kind === 'dl' ? '<br><span data-cd="' + esc(it.id) + '" data-lvl="' + lvOf(it) + '" class="dl-left">' + cdFull(it) + '</span>' + (it.deadline > tnow() ? ' 後截止' : '')
+    : t.kind === 'due' ? '<br>下一個內部期限：' + fmtDate(it.progressDueAt) + '（<span data-cd="' + esc(it.id) + '" data-lvl="' + lvOf(it) + '" class="dl-left">' + cdFull(it) + '</span>）' : '';
   return '<div class="dt">' + head(it, '<span class="pst ' + p.cls + '">' + p.badge + '</span>') +
     '<p class="dt-line">' + esc(amtText(it)) + ' · ' + dl + left + '</p>' +
     progressBox(it) + structBox(it, false) +
@@ -745,7 +763,7 @@ async function ensureProgress(id, force) {
     if (e instanceof AdapterError && e.kind === 'auth') { setAuth(); renderAll(); }
   }
   redrawDrawer(id);
-  if (get(id) && get(id).progressStageKey === PAY_STEP) renderBoard();
+  if (get(id) && laneOf(get(id)) === 'active') renderBoard();   // 卡片上的付款鈕、已送件判斷都可能因步驟而變
 }
 
 // ---------------- 讀取：快照、逾時、輪詢、即時 ----------------
@@ -801,6 +819,8 @@ async function refresh() {
     if (dr && viewOf() === 'progress') ensureProgress(dr.id);
     // 停在「等待付款同意」又沒有 pay 連結的卡（備援）：opp_list 不帶步驟備註，背景補抓一次，卡片上才畫得出「去領標付款」
     items().filter(i => laneOf(i) === 'active' && i.progressStageKey === PAY_STEP && !linkOf(i, 'pay')).forEach(i => ensureProgress(i.id));
+    // 公告截止已過、目前步驟又不在送件後清單的卡：要看步驟（seal_submit 是否完成）才知道是不是已送件，背景補抓一次
+    items().filter(i => laneOf(i) === 'active' && i.deadline && i.deadline <= tnow() && !POST_SUBMIT_KEYS.includes(i.progressStageKey) && i.progressStatus !== 'done').forEach(i => ensureProgress(i.id));
   } catch (e) {
     if (e instanceof AdapterError && e.kind === 'auth') setAuth(); else S.net = 'offline';
   } finally {
