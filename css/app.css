@@ -815,3 +815,17 @@ p,li{text-wrap:pretty}
 .hpill[hidden]{display:none}
 @media (max-width:959px){ .lbody{padding-bottom:84px} }   /* 只加在會捲動的 .lbody；.board 不捲動，加在那裡會讓畫面底部空一條（A 真資料驗 v74） */
 .holdbtn[hidden]{display:none}
+
+/* ===== v75：待決入口放頁首第二列；手機拿掉浮動圓鈕 ===== */
+.hpill{display:none!important}
+.sum-hold{display:inline;min-height:0;padding:10px 2px;margin:-10px -2px;border:0;background:none;font:inherit;color:var(--ink);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.sum-hold b{color:var(--ink)}
+@media (min-width:960px){ .sum-hold,.sum-hold-sep{display:none} }   /* 桌機用頂列那顆 */
+@media (max-width:959px) and (max-height:520px){ .sum-hold,.sum-hold-sep{display:none} }   /* 橫向手機也是頂列那顆 */
+.holdbtn[hidden]{display:none}
+@media (max-width:520px){
+  .top{grid-template-areas:"t . f r" "l s s s" "h h h h"}
+  .lv-p{display:none}
+  #sum{min-height:24px;line-height:24px}
+  .sum-hold{min-height:24px}
+}

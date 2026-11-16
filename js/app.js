@@ -1,6 +1,6 @@
 // 好咖皮條客主程式：狀態、畫面、事件。只透過 adapter.js 取得與寫入資料。版面規格見交接包 DESIGN.md。
-import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl, RK, SCAN_LANES } from './adapter.js?v74';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
-import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v74';
+import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl, RK, SCAN_LANES } from './adapter.js?v75';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
+import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v75';
 
 const $ = s => document.querySelector(s);
 const LANES = [
@@ -240,7 +240,7 @@ function renderLive() {
   if (S.net === 'loading') { dot = 'idle'; txt = S.hadData ? '更新中，先顯示上次的內容' : '載入中'; }
   else if (S.net === 'offline') { dot = 'off'; txt = S.lastOk ? '離線中，顯示 ' + fmtClock(S.lastOk) + ' 的內容' : '連不上伺服器'; }
   else if (S.net === 'auth') { dot = 'off'; txt = '金鑰失效'; }
-  else { dot = S.rt ? '' : 'idle'; txt = (mock ? '示範資料，' : S.rt ? '即時更新，' : '每 15 秒更新，') + fmtClock(S.lastOk) + ' 更新'; }
+  else { dot = S.rt ? '' : 'idle'; txt = '<span class="lv-p">' + (mock ? '示範資料，' : S.rt ? '即時更新，' : '每 15 秒更新，') + '</span>' + fmtClock(S.lastOk) + ' 更新'; }   // v75：手機收起前綴，留時間
   if (S.caps && !can('act') && S.net !== 'auth') txt += '（唯讀）';
   el.innerHTML = '<span class="dot ' + dot + '"></span><span>' + txt + '</span>';
 }
@@ -251,7 +251,10 @@ function renderSummary() {
   const hot = items().filter(i => (i.status === 'new' || i.status === 'snoozed') && i.deadline && i.deadline > now && i.deadline - now < URGENT_DAYS * D).length;
   // v73（Borry「上面黃色的地方的資訊就合併到那一區去 最緊急的就一樣小字在上面提醒」）：右上角多一行最緊急的一件，點了打開那張卡
   const u = S.hadData ? urgentOne() : null; void hot;
-  $('#sum').innerHTML = S.hadData ? '<b>' + live + '</b> 筆待看' + (act ? '<span class="sep"> · </span><b>' + act + '</b> 筆進行中' : '') : '';
+  // v75：「待決 N」接在筆數後面；暫存 0 件但有剛完成或剛收走的卡時顯示「待決 0」，讓人進得去；什麼都沒有才不顯示
+  const hn = holdItems().length, hold = S.net !== 'auth' && (hn || doneItems().length || goneItems().length);
+  $('#sum').innerHTML = S.hadData ? '<b>' + live + '</b> 筆待看' + (act ? '<span class="sep"> · </span><b>' + act + '</b> 筆進行中' : '') +
+    (hold ? '<span class="sep sum-hold-sep"> · </span><button class="sum-hold" type="button" data-act="open-hold" aria-haspopup="dialog" aria-label="待決區，' + hn + ' 筆">待決 <b>' + hn + '</b></button>' : '') : '';
   // v74：急件小字獨立一列、整列寬、單行截斷（v73 放在 #sum 裡，真資料一長就把標題擠成直排）
   const hr = $('#hot');
   if (hr) { hr.innerHTML = u ? '<button class="hot-line" data-act="open-hot" data-id="' + esc(u.it.id) + '" type="button" title="' + esc(u.txt) + '">⚠ ' + esc(u.txt) + '</button>' : ''; hr.hidden = !u; }
@@ -434,7 +437,9 @@ function gcard(it) {
 }
 function renderSheet() {
   const h = holdItems(), f = doneItems(), g = goneItems();
-  $('#hpill').hidden = $('#holdbtn').hidden = S.net === 'auth' || !h.length;   // v74：0 件不顯示（Borry 實拍「待決區 0」蓋住深入了解）
+  $('#hpill').hidden = true;                 // v75：手機不再有浮動圓鈕，入口改在頁首第二列（renderSummary 的「待決 N」）
+  $('#holdbtn').hidden = S.net === 'auth';   // 桌機頂列那顆不會蓋到卡片，照常顯示（D 複審：剛收走的卡要救得回來）
+  renderSummary();
   $('#holdbtn').innerHTML = '待決區<b>' + h.length + '</b>';
   $('#hpill').innerHTML = '<span class="hp-l">待決</span><b>' + h.length + '</b>'; $('#hpill').setAttribute('aria-label', '待決區，' + h.length + ' 筆');
   const sh = $('#sheet'); const sc = sh.querySelector('.db') ? sh.querySelector('.db').scrollTop : 0;
