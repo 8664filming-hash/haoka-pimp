@@ -791,3 +791,27 @@ p,li{text-wrap:pretty}
 /* v73 複審（D）：桌機掃描文字長時「↻ 立即掃描」不要掉到第二行 */
 .lh .scan{flex-wrap:nowrap}
 .lh .scan .scan-st{flex:1 1 0}
+
+/* ===== v74 急修：手機頁首三列、急件小字獨立一列、待決區縮成圓形 ===== */
+.top h1{white-space:nowrap;flex:none}
+.live{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.live span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.top{flex-wrap:wrap}
+.hotrow{flex:1 1 100%;min-width:0;order:9}
+.hotrow[hidden]{display:none}
+.hotrow .hot-line{display:block;width:100%;max-width:100%;margin:0;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+@media (min-width:521px){ .hotrow .hot-line{text-align:right} }
+@media (max-width:520px){
+  .top{grid-template-columns:auto minmax(0,1fr) auto auto;grid-template-areas:"t . f r" "l l s s" "h h h h";row-gap:2px}
+  .top h1{grid-area:t}
+  #live{grid-area:l;min-width:0}
+  #sum{grid-area:s;min-width:0;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .hotrow{grid-area:h}
+}
+/* 待決區：圓形小按鈕（數字在上、「待決」小字在下），不蓋到卡片的按鈕 */
+.hpill{width:56px;height:56px;min-height:0;padding:0;border-radius:50%;flex-direction:column;justify-content:center;gap:0;font-size:11px;line-height:1.1}
+.hpill .hp-l{order:2;font-size:11px;font-weight:800;color:var(--mut)}
+.hpill b{order:1;min-width:0;height:auto;padding:0;background:none;color:var(--ink);font-size:18px;line-height:1.1}
+.hpill[hidden]{display:none}
+@media (max-width:959px){ .lbody{padding-bottom:84px} }   /* 只加在會捲動的 .lbody；.board 不捲動，加在那裡會讓畫面底部空一條（A 真資料驗 v74） */
+.holdbtn[hidden]{display:none}

@@ -32,7 +32,7 @@
 //   realbuild    要做之後照真卡流程：排隊 → 建立中 → 建好（看 3 秒快輪詢與第 1 步自動完成）
 //   folderslow   同 realbuild，但 12 秒後才建好
 //   live         9 秒後進來一張新卡（看新進光暈與 toast）
-import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq, normalizeArchived, normalizeFollowups, normalizeFollowup, normalizeEvents } from './adapter.js?v73';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
+import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq, normalizeArchived, normalizeFollowups, normalizeFollowup, normalizeEvents } from './adapter.js?v74';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
 
 const H = 3600e3, D = 24 * H, MIN = 60e3;
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -204,7 +204,9 @@ function build() {
     st('pitch_prep', '評選簡報準備', 'current', { due_at: qflag.includes('sentnodue') ? null : iso(now + 2 * D + 2 * H), owner: 'AI', note: '簡報稿與分鏡要先給內審。標案說明寫「本案鼓勵運用 AI 工具」，這句是公告原文，不換字。內審資料夾：https://drive.google.com/drive/folders/demo-pitch' }),
     st('pitch_present', '評選簡報', 'pending'), st('await_opening', '等待開標', 'pending'), st('result', '決標或結案', 'pending'),
   ];
+  if (qflag.includes('longname')) { sent.short_title = '台江人物故事影像紀錄計畫第二期（待 Louis 審 v2.6 並回覆決策卡 B1–B4）'; sent.title = sent.short_title; }   // v74：重現真資料的長案名
   rows.push(sent);
+  if (qflag.includes('nohold')) for (let i = rows.length - 1; i >= 0; i--) if (rows[i].status === 'stashed') rows.splice(i, 1);
   // ---------- 封存區示意：已結案的卡（sql/25：仍是 doing，progress_state=done、progress_outcome＝結果，結案 14 天後撤下看板） ----------
   const arch = (o, kind, daysAgo, note) => { const t = now - daysAgo * D;
     const r = Object.assign(doing(o, o.lane || 'tender', 7, {}), { progress_state: 'done', progress_outcome: kind, progress_archive_at: iso(t + 14 * D), progress_note: note || null, progress_updated_at: iso(t), progress_updated_by: 'operator' });

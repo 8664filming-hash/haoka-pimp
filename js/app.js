@@ -1,6 +1,6 @@
 // 好咖皮條客主程式：狀態、畫面、事件。只透過 adapter.js 取得與寫入資料。版面規格見交接包 DESIGN.md。
-import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl, RK, SCAN_LANES } from './adapter.js?v73';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
-import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v73';
+import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl, RK, SCAN_LANES } from './adapter.js?v74';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
+import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v74';
 
 const $ = s => document.querySelector(s);
 const LANES = [
@@ -251,18 +251,20 @@ function renderSummary() {
   const hot = items().filter(i => (i.status === 'new' || i.status === 'snoozed') && i.deadline && i.deadline > now && i.deadline - now < URGENT_DAYS * D).length;
   // v73（Borry「上面黃色的地方的資訊就合併到那一區去 最緊急的就一樣小字在上面提醒」）：右上角多一行最緊急的一件，點了打開那張卡
   const u = S.hadData ? urgentOne() : null; void hot;
-  $('#sum').innerHTML = S.hadData ? '<b>' + live + '</b> 筆待看' + (act ? '<span class="sep"> · </span><b>' + act + '</b> 筆進行中' : '') +
-    (u ? '<button class="hot-line" data-act="open-hot" data-id="' + esc(u.it.id) + '" type="button" title="' + esc(u.txt) + '">⚠ ' + esc(u.txt) + '</button>' : '') : '';
+  $('#sum').innerHTML = S.hadData ? '<b>' + live + '</b> 筆待看' + (act ? '<span class="sep"> · </span><b>' + act + '</b> 筆進行中' : '') : '';
+  // v74：急件小字獨立一列、整列寬、單行截斷（v73 放在 #sum 裡，真資料一長就把標題擠成直排）
+  const hr = $('#hot');
+  if (hr) { hr.innerHTML = u ? '<button class="hot-line" data-act="open-hot" data-id="' + esc(u.it.id) + '" type="button" title="' + esc(u.txt) + '">⚠ ' + esc(u.txt) + '</button>' : ''; hr.hidden = !u; }
 }
 // 最緊急的一件：只從進行中挑（Borry「截止日要放的是進行中的！」）——卡住、逾期、4 天內到期，取下一個關鍵時間最早的（卡住當成現在）；進行中沒有急件就不顯示
-function urgentOne() {
-  const now = tnow(), c = [];
-  activeItems().forEach(it => { const p = pv(it); if (it.progressStatus === 'done' || !(p.alert || lvOf(it) === 'hot')) return; const t = target(it); c.push({ it, at: p.k === 'blocked' ? now : (t.at || now), t, blk: p.k === 'blocked' }); });
+function urgentOne() {   // v74（Borry「截止日要放的是進行中的！」）：進行中、還沒結案的卡，取還沒到的下一個關鍵時間最近、而且 4 天內的那件；卡住原因不放這裡
+  const now = tnow();
+  const c = activeItems().filter(it => it.progressStatus !== 'done').map(it => ({ it, at: keyTime(it) })).filter(x => x.at && x.at > now && x.at - now < URGENT_DAYS * D).sort((a, b) => a.at - b.at);
   if (!c.length) return null;
-  const x = c.sort((a, b) => a.at - b.at)[0], it = x.it;
-  if (x.blk) return { it, txt: nm(it) + ' 卡住：' + (it.progressBlocker || '原因沒寫') };
-  const lab = x.t.kind === 'dl' ? '截止' : milestone(it);
-  return { it, txt: nm(it) + ' ' + (x.t.at && x.t.at > now ? dayClock(x.t.at) + ' ' + lab : (x.t.kind === 'dl' ? '截止時間到' : lab + '已逾期')) };
+  const { it, at } = c[0];
+  const lab = !submitted(it) && it.deadline === at ? '截止' : milestone(it);
+  const n = nm(it), sn = n.length > 8 ? n.slice(0, 8) + '…' : n;
+  return { it, txt: sn + ' ' + fmtDay(at) + hm(at) + ' ' + lab + '・剩 ' + shortLeft(at - now) };
 }
 function dayClock(t) {   // 今天 10:00／明天 10:00／11/20 10:00（台北時間）
   const dd = Math.floor((t + 8 * H) / D) - Math.floor((tnow() + 8 * H) / D);
@@ -432,9 +434,9 @@ function gcard(it) {
 }
 function renderSheet() {
   const h = holdItems(), f = doneItems(), g = goneItems();
-  $('#hpill').hidden = $('#holdbtn').hidden = S.net === 'auth';
+  $('#hpill').hidden = $('#holdbtn').hidden = S.net === 'auth' || !h.length;   // v74：0 件不顯示（Borry 實拍「待決區 0」蓋住深入了解）
   $('#holdbtn').innerHTML = '待決區<b>' + h.length + '</b>';
-  $('#hpill').innerHTML = '待決區<b>' + h.length + '</b>';
+  $('#hpill').innerHTML = '<span class="hp-l">待決</span><b>' + h.length + '</b>'; $('#hpill').setAttribute('aria-label', '待決區，' + h.length + ' 筆');
   const sh = $('#sheet'); const sc = sh.querySelector('.db') ? sh.querySelector('.db').scrollTop : 0;
   let body = '';
   if (!h.length && !f.length) body += '<div class="zero"><b>待決區是空的</b><span>' + TBD.sheetEmpty + '</span></div>';

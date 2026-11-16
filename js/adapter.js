@@ -81,7 +81,7 @@ export async function createAdapter() {
   const configured = CONFIG.SUPABASE_URL.startsWith('http') && !CONFIG.SUPABASE_URL.includes('YOUR-PROJECT-REF') && !CONFIG.SUPABASE_ANON_KEY.startsWith('YOUR-');
   if (!configured) console.info('[好咖皮條客] adapter.js 的 SUPABASE_URL / SUPABASE_ANON_KEY 還是待填佔位，目前顯示示範資料');
   if (hasKey() && !forceMock && configured) return liveAdapter();
-  const { mockAdapter } = await import('./mock.js?v73');   // ?v 跟 sw.js 的 CACHE 一起換
+  const { mockAdapter } = await import('./mock.js?v74');   // ?v 跟 sw.js 的 CACHE 一起換
   return mockAdapter(forceMock ? mockFlag : '');
 }
 
