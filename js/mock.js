@@ -32,7 +32,7 @@
 //   realbuild    要做之後照真卡流程：排隊 → 建立中 → 建好（看 3 秒快輪詢與第 1 步自動完成）
 //   folderslow   同 realbuild，但 12 秒後才建好
 //   live         9 秒後進來一張新卡（看新進光暈與 toast）
-import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq, normalizeArchived, normalizeFollowups, normalizeFollowup, normalizeEvents } from './adapter.js?v80';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
+import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq, normalizeArchived, normalizeFollowups, normalizeFollowup, normalizeEvents, normalizeBulletin } from './adapter.js?v81';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
 
 const H = 3600e3, D = 24 * H, MIN = 60e3;
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -213,6 +213,9 @@ function build() {
   if (qflag.includes('longname')) { sent.short_title = '台江人物故事影像紀錄計畫第二期（待 Louis 審 v2.6 並回覆決策卡 B1–B4）'; sent.title = sent.short_title; }   // v74：重現真資料的長案名
   rows.push(sent);
   if (qflag.includes('nohold')) for (let i = rows.length - 1; i >= 0; i--) if (rows[i].status === 'stashed') rows.splice(i, 1);
+  // v81：?mock=a9paid／a9fetched：停在 pay_approval 的 demo-a9 已付款或已抓檔（看領標兩步不畫步驟按鈕）
+  const a9 = rows.find(r => r.id === 'demo-a9');
+  if (a9 && /a9(paid|fetched)/.test(qflag)) Object.assign(a9, { bid_state: /a9fetched/.test(qflag) ? 'fetched' : 'paid', bid_paid_by: 'CC', bid_paid_at: ago(1), bid_paid_amount: 200 });
   // 領標四種狀態（?mock=bidrequested／bidpaid／bidfetching／bidfetched 套在 demo-t2；預設 demo-t1 是 none）
   const t2 = rows.find(r => r.id === 'demo-t2');
   if (t2 && qflag.includes('bid')) {
@@ -334,11 +337,16 @@ export function mockAdapter(modeStr) {
     { id: 'm4', item_id: 'demo-a10', author: RK, body: '還沒確定，機關說這週五前通知。我先把分鏡初稿排進明天。（示意）', reply_to: 'm3', status: 'done', handled_by: RK, created_at: tAgo(30) },
     { id: 'm6', item_id: 'demo-a10', author: '示範操作', body: '機關回了：簡報 11/18 早上 8 點，20 分鐘。', reply_to: null, status: 'done', handled_by: RK, created_at: tAgo(12) },
     { id: 'm7', item_id: 'demo-a10', author: RK, body: '收到，簡報稿改成 20 分鐘版本，明天中午前放內審。（示意）', reply_to: 'm6', status: 'done', handled_by: RK, created_at: tAgo(8) },
+    // v81：系統寫的紀錄（sql/29 paid、sql/32 step、sql/37 bid），畫面用系統通知樣式
+    { id: 'm8', item_id: 'demo-a10', author: 'CC', kind: 'paid', body: 'CC 已付領標費 NT$200，請領標並把重點整理到卡片（用公司卡）', reply_to: null, status: 'received', handled_by: null, created_at: tAgo(6) },
+    { id: 'm9', item_id: 'demo-a10', author: 'Pool 偵測', kind: 'bid', body: '📥 Pool 偵測到已領標（CC）：AI 建議投，題目跟我們做過的觀光片很像，預算也夠。（示意）', reply_to: null, status: 'done', handled_by: null, created_at: tAgo(5) },
+    { id: 'm10', item_id: 'demo-a10', author: '示範操作', kind: 'step', body: '示範操作 把『用印送件』標成目前這一步（示意）', reply_to: null, status: 'done', handled_by: null, created_at: tAgo(4) },
     { id: 'm5', item_id: 'demo-a1', author: '同事 A', body: '第二段節奏我看過了，可以。', reply_to: null, status: 'received', handled_by: null, created_at: tAgo(20) },
   ];
   if (flags.has('xss')) msgs.push({ id: 'mx', item_id: null, author: XP, body: XP + '\n第二行' + XP, reply_to: null, status: XP, handled_by: XP, created_at: tAgo(5) },
                                   { id: 'mx2', item_id: 'xss-doing', author: RK, body: XP, reply_to: 'mx', status: 'done', handled_by: RK, created_at: tAgo(4) });
   let msgN = 0;
+  const bulT0 = Date.now();   // v81：示意報告的產生時間固定，內容沒變就不會重畫（真後端 generated_at 也是重組才變）
   // ---------- 追蹤事項示意（opp_followups 的欄位格式） ----------
   const fuAt = h => iso(Date.now() + h * H);
   let fus = flags.has('empty') ? [] : [
@@ -622,6 +630,35 @@ export function mockAdapter(modeStr) {
       r.progress_updated_at = iso(Date.now()); r.progress_updated_by = me(); derive(r);
       evs.push({ at: iso(Date.now()), item_id: id, actor: me(), action: 'step:' + status, detail: { step_key: key, step_name: s.name, from: was, note: note || null, as: mine ? 'owner' : 'admin' } });
       ping(); return normalize(Object.assign(card(r), { progress_steps: r.progress_steps }));
+    },
+    // v81：追蹤公告的每日報告（sql/37）。?mock=nobulletin 模擬 RPC 還沒上線；?mock=bulletinnull 模擬還沒有任何一筆；?mock=bul11 看 11:00 查證版
+    async bulletin() {
+      await wait(140);
+      if (flags.has('offline')) throw new AdapterError('network', '連不上伺服器');
+      if (flags.has('nobulletin')) throw new AdapterError('server', 'Could not find the function public.opp_bulletin_get(p_key) in the schema cache', 404);
+      if (flags.has('bulletinnull') || flags.has('empty')) return normalizeBulletin(null);
+      const t = bulT0, tw = ms => new Date(ms + 8 * H).toISOString().slice(0, 16), day = ms => Math.floor((ms + 8 * H) / D);
+      const cs = rows.filter(r => r.status === 'doing' && r.id !== 'demo-a2' && r.progress_state !== 'done' && r.deadline && Date.parse(r.deadline) > t)
+        .sort((a, b) => Date.parse(a.deadline) - Date.parse(b.deadline)).slice(0, 3).map(r => {
+          const st = (r.progress_steps || []).find(s => s.status === 'current' || s.status === 'blocked'), ls = [];
+          if (r.progress_blocker) ls.push((st && st.owner || 'CC') + '：' + r.progress_blocker);
+          if (st) ls.push((st.owner || '肉咖') + '：' + st.name + (st.status === 'blocked' ? '（卡住）' : ''));
+          if (!ls.length) ls.push('肉咖：照進度走，目前沒有卡住（示意）');
+          return { kind: 'case', item_id: r.id, title: r.short_title || r.title, deadline: tw(Date.parse(r.deadline)), days_left: day(Date.parse(r.deadline)) - day(t), lines: ls, stamp: '⏰ 示意' };
+        });
+      const soon = t + 2 * H, next = t + 26 * H;
+      cs.unshift({ kind: 'case', item_id: null, title: '某市府形象短片（示意，不在看板上）', deadline: tw(soon), days_left: day(soon) - day(t), lines: ['巴西：報價單下班前給 CC 用印', 'CC：用印後掃描上傳內審'], stamp: '' },
+                 { kind: 'case', item_id: 'demo-a2', title: '產業故事影音案', deadline: tw(next), days_left: day(next) - day(t), lines: ['Louis：企劃書第三章補拍攝時程', 'CC：等公司用印'], stamp: '' });
+      return normalizeBulletin({
+        body: '（純文字版，給 LINE 用）', generated_at: iso(t - 4 * 60e3), source: flags.has('bul11') ? 'daily11' : 'live',
+        sections: [
+          { kind: 'summary', text: '今明兩天有 2 案截止，用印要先排；其他案子照進度走。（示意）' },
+          ...cs,
+          { kind: 'schedule', lines: ['11/18（三）08:00 恆春觀光推廣影片 簡報 20 分鐘（示意）', '11/20（五）14:00 跟機關開協調會（示意）'] },
+          { kind: 'bid', lines: ['產業故事影音案：CC 已領標，肉咖判讀建議投（示意）'] },
+          { kind: 'followup', lines: ['Louis：回覆機關簡報時間（3 小時後到期）'] },
+          ...(flags.has('bulweird') ? [{ kind: 'note', lines: ['不認得的段落照行顯示（示意）'] }, { kind: 'memo', text: '只有 text 的不認得段落整段顯示（示意）' }, { kind: 'case', title: '', lines: [] }] : []),
+        ] });
     },
     async track(id, action, detail) { await wait(60); evs.push({ at: iso(Date.now()), item_id: id, actor: me(), action: 'track:' + action, detail: detail || {} }); return { recorded: true }; },
     async presence() {

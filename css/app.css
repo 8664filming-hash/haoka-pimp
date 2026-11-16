@@ -883,3 +883,33 @@ p,li{text-wrap:pretty}
   #sum{min-height:24px;line-height:24px}
   .sum-hold{min-height:24px}
 }
+
+/* ===== v81：追蹤公告的每日報告（不用大色塊；今天、明天截止用進行中標籤的黃） ===== */
+.bul{margin:0;padding-bottom:14px;border-bottom:1.5px solid var(--line)}
+.bul-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:6px}
+.bul-h h3{font-size:14px;color:var(--mut);font-weight:700;margin:0}
+.bul-t{font-size:12.5px;color:var(--mut);white-space:nowrap}
+.bul-wait{font-size:14.5px;color:var(--mut);margin:2px 0 0}
+.bul-sum{font-size:16px;line-height:1.6;color:var(--ink);font-weight:700;margin:0 0 10px;overflow-wrap:anywhere}
+.bul-cases{display:grid;gap:8px;margin:0 0 10px}
+@media (min-width:700px){ .bul-cases{grid-template-columns:repeat(auto-fill,minmax(280px,1fr))} }
+.bul-case{padding:10px 12px;border:1.5px solid var(--line);border-radius:12px;background:var(--card);min-width:0}
+.bul-name{display:block;margin:0;padding:0;border:0;background:none;font:inherit;font-size:15.5px;font-weight:800;line-height:1.45;color:var(--ink);text-align:left;overflow-wrap:anywhere;min-height:0}
+button.bul-name{cursor:pointer;text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:3px}
+button.bul-name:hover{text-decoration-color:var(--ink)}
+.bul-dt{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;margin:4px 0 0;font-size:13px;color:var(--mut)}
+.bul-due{font-weight:800;color:var(--ink)}
+.bul-due.soon{padding:1px 8px;border-radius:999px;background:#fff3d6;color:#6b4500}
+.bul-due.past{color:var(--mut)}
+.bul-ls{margin:6px 0 0;padding:0;list-style:none}
+.bul-ls li{position:relative;padding:2px 0 2px 14px;font-size:14.5px;line-height:1.55;color:var(--ink);overflow-wrap:anywhere}
+.bul-ls li::before{content:'';position:absolute;left:3px;top:.8em;width:5px;height:5px;border-radius:50%;background:var(--dash)}
+.bul-ls li b{font-weight:800}
+.bul-sec{margin:10px 0 0}
+.bul-sec h4{font-size:13px;color:var(--mut);font-weight:700;margin:0 0 2px}
+.bul-p{font-size:14.5px;line-height:1.6;margin:2px 0 0;overflow-wrap:anywhere}
+.fu-h3{font-size:14px;color:var(--mut);font-weight:700;margin:0}
+/* v81：系統寫的對話紀錄（付款、步驟、Pool 偵測）：置中、虛線框、灰字，不是人講的話 */
+.msg.sys{justify-self:stretch;max-width:100%;background:none;border:1.5px dashed var(--line);border-radius:12px;padding:6px 10px}
+.msg.sys .msg-b{font-size:13.5px;color:var(--mut)}
+.msg.sys .msg-h b{color:var(--mut)}

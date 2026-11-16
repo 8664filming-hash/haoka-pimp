@@ -38,14 +38,15 @@ export const CONFIG = {
          followupList: 'opp_followup_list', followupUpdate: 'opp_followup_update',
          events: 'opp_events',
          requestBid: 'opp_request_bid', markPaid: 'opp_mark_paid',   // 領標（sql/29、31）
-         stepMark: 'opp_step_mark', track: 'opp_track', presence: 'opp_admin_presence' },   // 步驟按鈕（32）、點擊紀錄（34）、誰接進來了（35）   // 卡片紀錄（sql/29，D 做；viewer 以上可讀）   // 追蹤事項（sql/27，C 做）   // 封存區與徹底刪除（sql/25，C 做）
+         stepMark: 'opp_step_mark', track: 'opp_track', presence: 'opp_admin_presence',
+         bulletin: 'opp_bulletin_get' },   // v81：追蹤公告的每日報告（sql/37，C 做）   // 步驟按鈕（32）、點擊紀錄（34）、誰接進來了（35）   // 卡片紀錄（sql/29，D 做；viewer 以上可讀）   // 追蹤事項（sql/27，C 做）   // 封存區與徹底刪除（sql/25，C 做）
   MSG_LIMIT: 50,
 };
 
 // 後端回來的英文名字或程式名 → 畫面上的顯示名。沒列到的照原字顯示。
 // v73：本機和系統做的（企劃流程-claude、mac-studio-3、找案子-bot、Fetcher、system、公司 Claude，任何含 claude、bot 的金鑰名）一律顯示「肉咖」；同事的金鑰名照原樣
 export const NICK = {};
-const SYS_NAME = /claude|(^|[^a-z])bot([^a-z]|$)|^mac-studio|^fetcher$|^system$|^planner$|企劃流程|系統自動/i;   // bot 只認獨立的字（找案子-bot、rouka-bot），Abbott、Robot 這類人名不換（D 複審）
+const SYS_NAME = /claude|(^|[^a-z0-9_])bot([^a-z0-9_]|$)|^mac-studio|^fetcher$|^system$|^planner$|企劃流程|系統自動/i;   // v81：bot 前後也不能是數字或底線（只比整個字）   // bot 只認獨立的字（找案子-bot、rouka-bot），Abbott、Robot 這類人名不換（D 複審）
 export const nick = n => !n ? n : NICK[n] || (SYS_NAME.test(String(n).trim()) ? '肉咖' : n);
 
 export class AdapterError extends Error {
@@ -83,7 +84,7 @@ export async function createAdapter() {
   const configured = CONFIG.SUPABASE_URL.startsWith('http') && !CONFIG.SUPABASE_URL.includes('YOUR-PROJECT-REF') && !CONFIG.SUPABASE_ANON_KEY.startsWith('YOUR-');
   if (!configured) console.info('[好咖皮條客] adapter.js 的 SUPABASE_URL / SUPABASE_ANON_KEY 還是待填佔位，目前顯示示範資料');
   if (hasKey() && !forceMock && configured) return liveAdapter();
-  const { mockAdapter } = await import('./mock.js?v80');   // ?v 跟 sw.js 的 CACHE 一起換
+  const { mockAdapter } = await import('./mock.js?v81');   // ?v 跟 sw.js 的 CACHE 一起換
   return mockAdapter(forceMock ? mockFlag : '');
 }
 
@@ -174,7 +175,22 @@ export function normalize(r) {
 export const RK = '肉咖';   // 肉咖回覆的 author
 export function normalizeMsg(m) {
   return { id: str(m.id), itemId: m.item_id == null ? '' : str(m.item_id), author: nick(str(m.author)), body: str(m.body),
-    replyTo: m.reply_to == null ? '' : str(m.reply_to), status: str(m.status), handledBy: str(m.handled_by), createdAt: ts(m.created_at), itemShortTitle: str(m.item_short_title) };
+    replyTo: m.reply_to == null ? '' : str(m.reply_to), status: str(m.status), handledBy: str(m.handled_by), createdAt: ts(m.created_at), itemShortTitle: str(m.item_short_title),
+    kind: str(m.kind) || 'msg' };   // v81：msg＝人講的話；paid、step、bid（sql/29、32、37）＝系統寫的紀錄
+}
+// v81：追蹤公告的每日報告（sql/37 opp_bulletin_get）→ { body, sections, generatedAt, source } 或 null（還沒有任何一筆）
+// deadline 沒帶時區（"2026-11-18T10:00"）一律當台灣時間；days_left 前端會照 deadline 重算，報告舊了倒數也不會錯
+const bulTs = v => { const s = str(v).trim(); if (!s) return null; const m = s.match(/^\d{4}-\d\d-\d\d(T\d\d:\d\d(:\d\d(\.\d+)?)?)?$/); return ts(m ? s + (m[1] ? '' : 'T00:00') + '+08:00' : s); };
+export function normalizeBulletin(d) {
+  if (Array.isArray(d)) d = d[0];
+  if (!d || typeof d !== 'object') return null;
+  const lines = v => (Array.isArray(v) ? v : []).map(x => rkText(typeof x === 'string' ? x : x == null ? '' : typeof x === 'object' ? str(x.text || '') : str(x))).filter(x => x.trim()).map(x => x.replace(/^([^：:\s\d][^：:\n]{0,19}?)\s*([：:])(?!\d)/, (m, n, c) => nick(n.trim()) + c));   // 行首「名字：」也過 nick（Company Claude、找案子-bot → 肉咖）
+  const sections = (Array.isArray(d.sections) ? d.sections : []).filter(s => s && typeof s === 'object').map(s => ({
+    kind: str(s.kind), text: rkText(str(s.text)), itemId: s.item_id == null ? '' : str(s.item_id), title: rkText(str(s.title)),
+    deadline: bulTs(s.deadline), dateOnly: /^\d{4}-\d\d-\d\d$/.test(str(s.deadline).trim()),
+    daysLeft: s.days_left == null || s.days_left === '' || !Number.isFinite(Number(s.days_left)) ? null : Math.trunc(Number(s.days_left)),
+    stamp: rkText(str(s.stamp)), lines: lines(s.lines) }));
+  return { body: rkText(str(d.body)), sections, generatedAt: ts(d.generated_at), source: str(d.source) };
 }
 const msgs = d => (Array.isArray(d) ? d : (d && Array.isArray(d.items) ? d.items : [])).filter(x => x && typeof x === 'object' && x.id != null).map(normalizeMsg);
 
@@ -301,6 +317,7 @@ function liveAdapter() {
     // 誰接進來了（sql/35，只有 admin）
     async presence() { const d = await rpc(R.presence, {}); return (Array.isArray(d) ? d : []).filter(x => x && x.name).map(x => ({ name: str(x.name), kind: str(x.kind), firstSeenAt: ts(x.first_seen_at), lastSeenAt: ts(x.last_seen_at), seenCount: int(x.seen_count) || 0, lastActionAt: ts(x.last_action_at), status: str(x.status), statusText: str(x.status_text) })); },
     async events(id, limit) { return normalizeEvents(await rpc(R.events, { p_id: id, p_limit: limit || 100 })); },
+    async bulletin() { return normalizeBulletin(await rpc(R.bulletin, {})); },   // v81（sql/37）
     async followupUpdate(fid, patch) { const d = await rpc(R.followupUpdate, { p_fid: fid, p_patch: patch }); const one = Array.isArray(d) ? d[0] : d; return one && typeof one === 'object' && one.id != null ? normalizeFollowup(one) : null; },
     async purge(id, title) { return await rpc(R.purge, { p_id: id, p_confirm_title: title }); },
     async scanStatus() { return normalizeScans(await rpc(R.scanStatus, {})); },

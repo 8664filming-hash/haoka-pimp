@@ -1,6 +1,6 @@
 // 好咖皮條客主程式：狀態、畫面、事件。只透過 adapter.js 取得與寫入資料。版面規格見交接包 DESIGN.md。
-import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl, RK, SCAN_LANES } from './adapter.js?v80';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
-import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v80';
+import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl, RK, SCAN_LANES } from './adapter.js?v81';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
+import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v81';
 
 const $ = s => document.querySelector(s);
 const LANES = [
@@ -65,8 +65,9 @@ const linksOf = it => Array.isArray(it.links) ? it.links : [];
 const linkOf = (it, kind) => linksOf(it).find(l => l.kind === kind);
 const extLink = (l, cls, text) => '<a class="' + cls + '" href="' + esc(l.url) + '" target="_blank" rel="noopener noreferrer">' + esc(text || linkText(l)) + '</a>';
 // 卡片上的「去領標付款」：先看 links 的 pay；沒有才用備援——目前那一步是 pay_approval，網址取該步備註（步驟清單有抓過時），再不然看整張卡的 progress_note
+const bidDone = it => !!it && (it.bidState === 'paid' || it.bidState === 'fetched');   // v81：已付款或已領標（含 Pool 偵測）
 function payUrl(it) {
-  if (it.status !== 'doing') return '';
+  if (it.status !== 'doing' || bidDone(it)) return '';   // v81：付過、領過就不再叫人去付款（D 審 v80）
   const pay = linkOf(it, 'pay'); if (pay) return pay.url;
   if (it.progressStageKey !== PAY_STEP) return '';
   const st = it.progressSteps && it.progressSteps.find(x => x.key === PAY_STEP);
@@ -95,7 +96,8 @@ const S = {
   detail: new Map(),   // id → {busy, timedOut, t0}
   prog: new Map(),     // id → {busy, at}：進度步驟抓過的版本（progressUpdatedAt）
   textOpen: new Set(), attOpen: new Set(), fresh: new Set(),
-  fu: { open: null, list: null, filter: 'open', busy: false, err: false, byItem: new Map(), ticket: 0 },   // 追蹤事項（v7）：open＝頂列數字用，list＝抽屜目前篩選
+  fu: { open: null, list: null, filter: 'open', busy: false, err: false, byItem: new Map(), ticket: 0 },
+  bul: { d: null, err: false, sig: '', at: 0, busy: false },   // v81：追蹤公告的每日報告（sql/37）   // 追蹤事項（v7）：open＝頂列數字用，list＝抽屜目前篩選
   scan: {}, scanBusy: new Set(),   // 立即掃描：三籃最新狀態
   arch: { list: null, q: '', year: '', busy: false }, archMap: new Map(), dlg: null,   // 封存區、結案與徹底刪除的確認框
   msgs: new Map(), msgBusy: new Set(), pend: new Map(), draft: new Map(), events: new Map(), evBusy: new Set(),
@@ -107,12 +109,13 @@ let OFF = 0;                                   // 伺服器時間與本機時間
 const tnow = () => Date.now() + OFF;
 const can = k => !!(S.caps && S.caps[k]);      // 依 opp_whoami 決定畫不畫按鈕；viewer 只有 read
 // v8：「我負責的步驟」——步驟 owner 照 sql/32 的規則比對 whoami 的 aliases（多人用 、，,／/;；&＋+ 分隔，不分大小寫、去掉空白）
-const normName = x => String(x || '').replace(/\s/g, '').toLowerCase();
+const normName = x => String(x || '').replace(/[ \t\n\v\f\r]/g, '').toLowerCase();   // v81：跟 sql/32 一樣只去半形空白類，全形空白不算（D 複審 v80）
 const myNames = () => new Set(((S.who && S.who.aliases && S.who.aliases.length ? S.who.aliases : S.who && S.who.role ? [S.who.role] : [])).map(normName).filter(Boolean));
 const ownerIsMe = s => { const me = myNames(); return !!me.size && String(s.ownerRaw || '').split(/[、，,／/;；&＋+]/).some(x => me.has(normName(x))); };
 const stepOpenNow = s => s.status === 'current' || s.status === 'blocked';   // 等你確認：只算目前這一步（或卡住的那步），之後的步驟還輪不到
 const mineSteps = it => (it.progressSteps || []).filter(s => stepOpenNow(s) && ownerIsMe(s));
-const canMarkStep = (s, it) => it && it.status === 'doing' && it.progressStatus !== 'done' && (can('admin') || can('progress') || (can('act') && ownerIsMe(s)));
+const bidManaged = (s, it) => !!s && (s.key === PAY_STEP || s.key === 'bid_fetch') && bidDone(it);   // v81：後端會回 bid_managed（D 複審 v80）
+const canMarkStep = (s, it) => it && it.status === 'doing' && it.progressStatus !== 'done' && !bidManaged(s, it) && (can('admin') || can('progress') || (can('act') && ownerIsMe(s)));
 const trackLabel = l => String(l || '').replace(/\S*:\/\/\S*|www\.\S*/gi, '').trim().slice(0, 60) || '檔案';
 function track(id, action, stepKey, label) {   // sql/34：先送、不等回應，失敗也不擋開檔
   if (!api || !api.track || !id) return;
@@ -517,7 +520,7 @@ function bidLine(it) {   // 卡片正面一行灰色小字（沒申請就不畫�
   const v = verdictOf(it);
   const t = it.bidState === 'requested' ? '領標中：' + it.bidRequestedBy + ' 申請'
     : it.bidState === 'paid' ? (bidFetching(it) ? '肉咖抓檔中' : '已付：' + it.bidPaidBy + (it.bidPaidAt ? ' ' + fmtDay(it.bidPaidAt).replace(/（.）/, '') : '') + (it.bidPaidAmount != null ? ' ' + NTD(it.bidPaidAmount) : ''))
-    : '已領標' + (v ? '・' + v[0] : '，重點在卡片內');
+    : (w => '已領標' + (w ? '：' + w : '') + (it.bidFetchedAt ? ' ' + fmtDay(it.bidFetchedAt).replace(/（.）/, '') : '') + (v ? '・' + v[0] : w || it.bidFetchedAt ? '' : '，重點在卡片內'))(it.bidFetchedBy || it.bidPaidBy);   // v81：寫誰、哪天領的
   return '<p class="bid-line">' + esc(t) + '</p>';
 }
 const bidPayLink = it => linkOf(it, 'pay') || (it.sourceUrl ? { kind: 'other', label: '開公告頁', url: it.sourceUrl, fallback: true } : null);
@@ -702,7 +705,7 @@ function stepRow(s, i, all, it) {
   const big = s.status === 'current' || s.status === 'blocked';
   const ok = it && it.id ? it.id + '|' + s.key : '', open = ok && stepOpen.has(ok);
   // 付款那步的按鈕一直露在外面（不用點開就能去付款）
-  const btn = u && s.key === PAY_STEP && big ? '<div class="step-acts">' + linkBtn(s.key, u, 'btn-primary') + '</div>' : '';
+  const btn = u && s.key === PAY_STEP && big && !bidDone(it) ? '<div class="step-acts">' + linkBtn(s.key, u, 'btn-primary') + '</div>' : '';   // v81：已付款、已領標不畫
   const meta = stepMeta(s, it);
   return '<li class="step ' + s.status + (open ? ' open' : '') + '">' +
     '<button class="step-h" data-act="step-tog" data-id="' + esc(it && it.id || '') + '" data-k="' + esc(s.key) + '" type="button" aria-expanded="' + !!open + '">' +
@@ -785,7 +788,7 @@ function folderRow(it) {
 function filesRow(it) {
   const keys = new Set((it.progressSteps || []).map(s => s.key));
   const ls = linksOf(it).filter(l => !(l.stepKey && keys.has(l.stepKey))); if (!ls.length) return '';
-  return '<div class="fold-row files"><p class="prog-upd">檔案</p><div class="fold-acts">' + ls.map(l => extLink(l, 'btn ' + (l.kind === 'pay' ? 'btn-primary' : 'btn-ghost') + ' file-link')).join('') + '</div></div>';
+  return '<div class="fold-row files"><p class="prog-upd">檔案</p><div class="fold-acts">' + ls.map(l => extLink(l, 'btn ' + (l.kind === 'pay' && !bidDone(it) ? 'btn-primary' : 'btn-ghost') + ' file-link')).join('') + '</div></div>';
 }
 function progressBox(it) {
   const p = pv(it), st = it.progressSteps, busy = S.prog.get(it.id) && S.prog.get(it.id).busy;
@@ -1078,7 +1081,7 @@ function seenStore() {
   return o;
 }
 function markSeen(key) {
-  const o = seenStore(), all = msgsAll().filter(m => m.author === RK && (m.itemId || '') === key);
+  const o = seenStore(), all = msgsAll().filter(m => m.author === RK && !sysMsg(m) && (m.itemId || '') === key);
   const t = Math.max(tnow(), ...all.map(m => m.createdAt || 0));
   if ((o.keys[key] || 0) >= t) return;
   o.keys[key] = t; try { localStorage.setItem(SEEN_KEY(), JSON.stringify(o)); } catch (e) {}
@@ -1087,7 +1090,7 @@ function markSeen(key) {
 const msgsAll = () => { const seen = new Set(), out = []; S.msgs.forEach(v => v.list.forEach(m => { if (!seen.has(m.id)) { seen.add(m.id); out.push(m); } })); return out; };
 function unreadReplies() {
   const o = seenStore();
-  return msgsAll().filter(m => m.author === RK && m.createdAt && m.createdAt > Math.max(o.base || 0, o.keys[m.itemId || ''] || 0));
+  return msgsAll().filter(m => m.author === RK && !sysMsg(m) && m.createdAt && m.createdAt > Math.max(o.base || 0, o.keys[m.itemId || ''] || 0));
 }
 function renderRk() {
   const b = $('#rkbtn'); if (!b) return;
@@ -1222,7 +1225,15 @@ function threadOf(key) {
   const pend = S.pend.get(key) || [];
   return list ? list.slice().sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).concat(pend) : null;   // 舊的在上
 }
+// v81：kind 不是 msg 的（paid 付款、step 步驟、bid Pool 偵測，都是系統寫的）用系統通知樣式，不當成人講的話
+const SYS_KIND = { paid: '付款紀錄', step: '進度紀錄', bid: 'Pool 偵測' };
+const sysMsg = m => !!m.kind && m.kind !== 'msg';
 function msgLi(m, all) {
+  if (sysMsg(m)) {
+    const del = canDelMsg() && m.id ? '<button class="msg-del" data-act="msg-del" data-mid="' + esc(m.id) + '" data-key="' + esc(m.itemId || '') + '" type="button" aria-label="刪掉這則紀錄">🗑</button>' : '';
+    return '<li class="msg sys"><p class="msg-h"><b>' + esc(SYS_KIND[m.kind] || '系統紀錄') + '</b>' + (m.createdAt ? ' · <span data-rel="' + m.createdAt + '">' + relTime(m.createdAt, tnow()) + '</span>' : '') + del + '</p>' +
+      '<div class="msg-b">' + para(m.body) + '</div></li>';
+  }
   const rk = m.author === RK;
   const st = m.pending ? MSG_ST.sending : rk ? '' : (MSG_ST[m.status] || '');
   const orig = rk && m.replyTo ? all.find(x => x.id === m.replyTo) : null;
@@ -1265,7 +1276,7 @@ function renderChatDrawer(dr) {
   const oth = recent.length ? '<section class="dt-sec chat-cards"><h3>各案最近對話</h3><div class="cc-list">' + recent.map(m => {
       const it = get(m.itemId), u = unread[m.itemId] || 0, body = m.body.length > 40 ? m.body.slice(0, 40) + '…' : m.body;
       return '<button class="cc-row' + (u ? ' new' : '') + '" data-act="chat-card" data-id="' + esc(m.itemId) + '" type="button"><span class="cc-h"><b>' + esc(it ? nm(it) : (m.itemShortTitle || '已不在看板的案子')) + '</b>' +
-        (u ? '<i class="cc-n">' + u + ' 則新回覆</i>' : '') + '<span class="cc-t">' + relTime(m.createdAt, tnow()) + '</span></span><span class="cc-b">' + esc(m.author || '不明') + '：' + esc(body) + '</span></button>'; }).join('') + '</div></section>' : '';
+        (u ? '<i class="cc-n">' + u + ' 則新回覆</i>' : '') + '<span class="cc-t">' + relTime(m.createdAt, tnow()) + '</span></span><span class="cc-b">' + (sysMsg(m) ? '' : esc(m.author || '不明') + '：') + esc(body) + '</span></button>'; }).join('') + '</div></section>' : '';
   dr.innerHTML = '<div class="dh"><span>跟肉咖說</span><button class="xb" data-act="close-drawer" type="button" aria-label="關閉">×</button></div><div class="db"><div class="dt">' + presHTML() + oth + chatHTML('') + '</div></div>' +
     '<div class="df"><button class="btn btn-ghost" data-act="close-drawer" type="button">回到面板</button></div>';
   dr.setAttribute('aria-label', '跟肉咖說');
@@ -1630,11 +1641,68 @@ function fuRow(f, inCard) {
 }
 function renderFuBtn() {
   const b = $('#fubtn'); if (!b) return;
-  b.hidden = S.net === 'auth' || !api || !api.followupList;
-  const l = S.fu.open || [], n = l.length, over = l.filter(fuOverdue).length, today = l.filter(fuToday).length;
-  b.classList.toggle('hot', over > 0); b.classList.toggle('warn', !over && today > 0);
-  b.innerHTML = '<span>追蹤公告</span>' + (n ? '<b class="fu-cnt">' + n + '</b>' : '');   // v73（Borry「追蹤的部分改成追蹤公告」）：只改名，功能不變
-  b.setAttribute('aria-label', '追蹤公告' + (n ? '，' + n + ' 件未完成' + (over ? '，' + over + ' 件逾期' : '') + (today ? '，' + today + ' 件今天截止' : '') : ''));
+  b.hidden = S.net === 'auth' || !api || (!api.followupList && !api.bulletin);
+  const l = S.fu.open || [], fn = l.length, over = l.filter(fuOverdue).length, today = l.filter(fuToday).length;
+  const urg = bulUrgent(), n = urg + fn;   // v81：數字＝今天、明天截止的案子＋未完成追蹤
+  b.classList.toggle('hot', over > 0); b.classList.toggle('warn', !over && (today > 0 || urg > 0));
+  b.innerHTML = '<span>追蹤公告</span>' + (n ? '<b class="fu-cnt">' + n + '</b>' : '');
+  b.setAttribute('aria-label', '追蹤公告' + (urg ? '，' + urg + ' 案今明兩天截止' : '') + (fn ? '，' + fn + ' 件追蹤未完成' + (over ? '，' + over + ' 件逾期' : '') + (today ? '，' + today + ' 件今天到期' : '') : ''));
+}
+// ---------------- 追蹤公告的每日報告（v81；後端 opp_bulletin_get，sql/37，C 做） ----------------
+// source：daily11＝11:00 查證過的正式報告；live＝程式從看板即時組的（面板改動 1 分鐘內反映）。讀不到或還沒有就只寫「報告準備中」
+const BUL_SEC = { schedule: '行程', bid: '領標', followup: '追蹤事項' };
+const bulDays = s => s.deadline ? tpDay(s.deadline) - tpDay(tnow()) : s.daysLeft;   // 照截止時間重算，報告舊了倒數也對
+const bulUrgent = () => { const d = S.bul.d; return d ? d.sections.filter(s => s.kind === 'case' && (s.title || s.lines.length) && (x => x === 0 || x === 1)(bulDays(s))).length : 0; };
+async function loadBul(force) {
+  if (!api || !api.bulletin || S.net === 'auth' || S.bul.busy) return;
+  if (!force && Date.now() - S.bul.at < 30e3) return;
+  S.bul.busy = true; S.bul.at = Date.now();
+  let d = S.bul.d, err = false;
+  try { d = await api.bulletin(); }
+  catch (e) { if (e instanceof AdapterError && e.kind === 'auth') { S.bul.busy = false; setAuth(); renderAll(); return; } err = true; }
+  S.bul.busy = false;
+  const sig = JSON.stringify([d, err && !d]);
+  if (sig === S.bul.sig) return;   // 內容沒變不重畫
+  S.bul.sig = sig; S.bul.d = d; S.bul.err = err;
+  renderFuBtn();
+  if (S.drawer && S.drawer.view === 'followups') renderDrawer();
+}
+setInterval(() => { if (S.drawer && S.drawer.view === 'followups' && !document.hidden) loadBul(true); }, 60e3);   // 分頁開著：每分鐘重抓
+const bulLine = x => { const m = x.match(/^([^：:\s\d][^：:\s]{0,9})([：:])(?!\d)(.*)$/s); /* 「Louis：…」名字加粗；「11/18（三）08:00…」這種時間開頭的不算 */ return '<li>' + (m ? '<b>' + esc(m[1]) + '</b>' + m[2] + esc(m[3]) : esc(x)) + '</li>'; };
+const bulList = ls => ls.length ? '<ul class="bul-ls">' + ls.map(bulLine).join('') + '</ul>' : '';
+function bulDue(s) {
+  const n = bulDays(s);
+  const when = s.deadline ? fmtDay(s.deadline) + (s.dateOnly ? '' : hm(s.deadline)) : '';
+  const lab = n == null ? '' : n < 0 ? '已過截止' : n === 0 ? '今天截止' : n === 1 ? '明天截止' : '剩 ' + n + ' 天';
+  if (!lab && !when) return s.stamp ? '<p class="bul-dt">' + esc(s.stamp) + '</p>' : '';
+  return '<p class="bul-dt">' + (lab ? '<span class="bul-due' + (n === 0 || n === 1 ? ' soon' : n < 0 ? ' past' : '') + '">' + lab + '</span>' : '') + (when ? '<span>' + esc(when) + '</span>' : '') + '</p>';
+}
+function bulCase(s) {
+  const t = s.title || '（沒寫案名）';
+  const name = s.itemId ? '<button class="bul-name" data-act="fu-card" data-id="' + esc(s.itemId) + '" type="button">' + softBreak(t) + '</button>' : '<b class="bul-name">' + softBreak(t) + '</b>';
+  return '<article class="bul-case">' + name + bulDue(s) + bulList(s.lines) + '</article>';
+}
+function bulHTML() {
+  const d = S.bul.d;
+  const secs = d ? (d.sections.length ? d.sections : d.body.trim() ? [{ kind: '', text: d.body, lines: [] }] : []) : [];
+  if (!secs.length) return '<section class="bul" aria-label="今日報告"><p class="bul-wait">報告準備中</p></section>';
+  const fuShown = api && api.followupList && !S.fu.err;   // 下面就是追蹤事項列表，報告裡的 followup 段落不重複畫
+  const out = [];
+  let cases = [];
+  const flush = () => { if (cases.length) { out.push('<div class="bul-cases">' + cases.join('') + '</div>'); cases = []; } };
+  secs.forEach(s => {
+    if (s.kind === 'case') { if (s.title || s.lines.length) cases.push(bulCase(s)); return; }
+    flush();
+    if (s.kind === 'summary') { if (s.text.trim()) out.push('<p class="bul-sum">' + para(s.text) + '</p>'); return; }
+    if (s.kind === 'followup' && fuShown) return;
+    const h = BUL_SEC[s.kind] || s.title || '';
+    const body = s.lines.length ? bulList(s.lines) : s.text.trim() ? '<p class="bul-p">' + para(s.text) + '</p>' : '';
+    if (body) out.push('<section class="bul-sec">' + (h ? '<h4>' + esc(h) + '</h4>' : '') + body + '</section>');
+  });
+  flush();
+  const g = d.generatedAt, rt = g ? relTime(g, tnow()) : '';
+  return '<section class="bul" aria-label="今日報告"><div class="bul-h"><h3>今日報告</h3><span class="bul-t">' +
+    (g ? '<span data-rel="' + g + '">' + rt + '</span>更新' : '') + (d.source === 'daily11' ? '<span class="bul-src"> · 11:00 查證版</span>' : '') + '</span></div>' + out.join('') + '</section>';
 }
 async function loadFu() {
   if (!api || !api.followupList || S.net === 'auth') return;
@@ -1679,7 +1747,7 @@ function openFu() {
   if (!S.drawer) lastFocus = document.activeElement;
   S.drawer = { id: '__fu', view: 'followups' };
   if (S.fu.filter === 'open' && S.fu.open) S.fu.list = S.fu.open; else S.fu.list = null;
-  loadFuList();
+  loadFuList(); loadBul(true);   // v81：打開分頁一定重抓報告
   renderDrawer(); syncOverlay();
   $('#drawer .xb')?.focus({ preventScroll: true });
 }
@@ -1690,13 +1758,13 @@ function renderFuDrawer(dr) {
   const body = !l ? '<p class="chat-empty">讀取追蹤事項中…</p>' : l.length ? '<div class="fu-list">' + l.map(x => fuRow(x, false)).join('') + '</div>'
     : '<p class="chat-empty">' + (S.fu.err ? '追蹤事項讀不到，請稍後再試。' : empty) + '</p>';
   const over = (S.fu.open || []).filter(fuOverdue).length;
-  dr.innerHTML = '<div class="dh"><span>追蹤事項</span><button class="xb" data-act="close-drawer" type="button" aria-label="關閉">×</button></div>' +
-    '<div class="db"><div class="dt"><div class="fu-filter" role="tablist" aria-label="篩選追蹤事項">' + FU_FILTERS.map(([k, t]) =>
+  dr.innerHTML = '<div class="dh"><span>追蹤公告</span><button class="xb" data-act="close-drawer" type="button" aria-label="關閉">×</button></div>' +
+    '<div class="db"><div class="dt">' + bulHTML() + (api && api.followupList ? '<h3 class="fu-h3">追蹤事項</h3><div class="fu-filter" role="tablist" aria-label="篩選追蹤事項">' + FU_FILTERS.map(([k, t]) =>
       '<button class="fu-f' + (k === f ? ' on' : '') + '" role="tab" aria-selected="' + (k === f) + '" data-act="fu-filter" data-f="' + k + '" type="button">' + t + (k === 'open' && S.fu.open ? ' ' + S.fu.open.length : '') + '</button>').join('') + '</div>' +
     '<p class="dt-meta" aria-live="polite">' + (S.fu.busy && l ? '<span class="spin"></span> 更新中…' : f === 'open' && over ? '<span class="fu-d hot">' + over + ' 件逾期</span>' : '') + (fuCanEdit() ? '' : (l && l.length ? ' 只有管理員能標完成或取消。' : '')) + '</p>' +
-    body + '<p class="fu-tip">肉咖每天 11:00 的報告會列出未完成的事項，到期當天或逾期會另外提醒。</p></div></div>' +
+    body + '<p class="fu-tip">同事在 LINE 或面板交代肉咖的事，到期當天或逾期肉咖會另外提醒。</p>' : '') + '</div></div>' +
     '<div class="df"><button class="btn btn-ghost" data-act="close-drawer" type="button">回到面板</button></div>';
-  dr.setAttribute('aria-label', '追蹤事項'); dr.dataset.key = '__fu';
+  dr.setAttribute('aria-label', '追蹤公告'); dr.dataset.key = '__fu';
   dr.querySelector('.db').scrollTop = sc; dr.classList.add('show');
 }
 function fuOpenCard(itemId) {
@@ -1819,6 +1887,7 @@ async function refresh() {
     loadMsgs();   // 跟肉咖說：不綁案子的對話（頂列紅點）＋正開著的那張卡
     loadScan();   // 立即掃描：三籃狀態
     loadFu();     // 追蹤事項：頂列數字、開著的抽屜、開著的進度（新增和更新都會發同一個 changed）
+    loadBul();    // v81：追蹤公告的每日報告（最多 30 秒抓一次；打開分頁時一定重抓）
     // 停在「等待付款同意」又沒有 pay 連結的卡（備援）：opp_list 不帶步驟備註，背景補抓一次，卡片上才畫得出「去領標付款」
     items().filter(i => laneOf(i) === 'active' && i.progressStageKey === PAY_STEP && !linkOf(i, 'pay')).forEach(i => ensureProgress(i.id));
     // 公告截止已過、目前步驟又不在送件後清單的卡：要看步驟（seal_submit 是否完成）才知道是不是已送件，背景補抓一次
