@@ -1,6 +1,6 @@
 // 好咖皮條客主程式：狀態、畫面、事件。只透過 adapter.js 取得與寫入資料。版面規格見交接包 DESIGN.md。
-import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl, RK, SCAN_LANES } from './adapter.js?v72';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
-import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v72';
+import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl, RK, SCAN_LANES } from './adapter.js?v73';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
+import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v73';
 
 const $ = s => document.querySelector(s);
 const LANES = [
@@ -215,6 +215,7 @@ const chip = it => { const l = homeLane(it); return '<span class="chip b-' + l +
 // F 的盯案後續：正式公告上看板時，why 開頭會寫明兩張卡接上了，在標籤列標出來
 const linkTag = it => /^（之前在盯案後續/.test(it.why) ? '<span class="link-badge">之前在盯案後續</span>' : /^正式公告已上看板/.test(it.why) ? '<span class="link-badge">正式公告已上看板</span>' : '';
 const demo = it => linkTag(it) + (it.isDemo ? '<span class="demo-badge">示意資料</span>' : '');
+const demo1 = it => linkTag(it) || (it.isDemo ? '<span class="demo-badge">示意資料</span>' : '');   // 進行中卡已有狀態徽章：再多一個就好（徽章最多 2 個）
 const orgLine = it => it.org && !it.title.includes(it.org) ? '<p class="dt-org">' + esc(it.org) + '</p>' : '';
 const cardOrg = it => it.org && !it.title.includes(it.org) ? '<p class="org">' + esc(it.org) + '</p>' : '';
 function amt(it) {
@@ -248,8 +249,26 @@ function renderSummary() {
   const live = items().filter(i => i.status === 'new').length;
   const act = activeItems().length;
   const hot = items().filter(i => (i.status === 'new' || i.status === 'snoozed') && i.deadline && i.deadline > now && i.deadline - now < URGENT_DAYS * D).length;
-  $('#sum').innerHTML = S.hadData ? '<b>' + live + '</b> 筆待看' + (act ? '<span class="sep"> · </span><b>' + act + '</b> 筆進行中' : '') + (hot ? '<br><span class="hotn">' + hot + ' 筆</span> ' + URGENT_DAYS + ' 天內截止' : '') : '';
+  // v73（Borry「上面黃色的地方的資訊就合併到那一區去 最緊急的就一樣小字在上面提醒」）：右上角多一行最緊急的一件，點了打開那張卡
+  const u = S.hadData ? urgentOne() : null; void hot;
+  $('#sum').innerHTML = S.hadData ? '<b>' + live + '</b> 筆待看' + (act ? '<span class="sep"> · </span><b>' + act + '</b> 筆進行中' : '') +
+    (u ? '<button class="hot-line" data-act="open-hot" data-id="' + esc(u.it.id) + '" type="button" title="' + esc(u.txt) + '">⚠ ' + esc(u.txt) + '</button>' : '') : '';
 }
+// 最緊急的一件：只從進行中挑（Borry「截止日要放的是進行中的！」）——卡住、逾期、4 天內到期，取下一個關鍵時間最早的（卡住當成現在）；進行中沒有急件就不顯示
+function urgentOne() {
+  const now = tnow(), c = [];
+  activeItems().forEach(it => { const p = pv(it); if (it.progressStatus === 'done' || !(p.alert || lvOf(it) === 'hot')) return; const t = target(it); c.push({ it, at: p.k === 'blocked' ? now : (t.at || now), t, blk: p.k === 'blocked' }); });
+  if (!c.length) return null;
+  const x = c.sort((a, b) => a.at - b.at)[0], it = x.it;
+  if (x.blk) return { it, txt: nm(it) + ' 卡住：' + (it.progressBlocker || '原因沒寫') };
+  const lab = x.t.kind === 'dl' ? '截止' : milestone(it);
+  return { it, txt: nm(it) + ' ' + (x.t.at && x.t.at > now ? dayClock(x.t.at) + ' ' + lab : (x.t.kind === 'dl' ? '截止時間到' : lab + '已逾期')) };
+}
+function dayClock(t) {   // 今天 10:00／明天 10:00／11/20 10:00（台北時間）
+  const dd = Math.floor((t + 8 * H) / D) - Math.floor((tnow() + 8 * H) / D);
+  return (dd === 0 ? '今天' : dd === 1 ? '明天' : fmtDay(t).replace(/（.）/, '')) + ' ' + hm(t);
+}
+const hasHot = () => activeItems().some(it => it.progressStatus !== 'done' && (pv(it).alert || lvOf(it) === 'hot'));
 function anomalyText() {
   const act = activeItems(), a = act.map(pv);
   const stuck = a.filter(p => p.alert === 'stuck').length, late = a.filter(p => p.alert === 'late').length;
@@ -278,10 +297,8 @@ function renderNotice() {
     html = '<span class="txt">' + (S.lastOk ? '連不到伺服器，畫面是 ' + fmtClock(S.lastOk) + ' 的內容。恢復連線後會自動更新。' : '連不到伺服器，也沒有上次的內容可以顯示。') + '</span><button type="button" data-act="retry">重試</button>';
   } else if (S.net === 'loading' && S.slow) {
     html = '<span class="spin"></span><span class="txt">' + (S.hadData ? '連線比較慢，先顯示上次的內容，等一下會自動更新。' : '載入比較久，網路可能很慢，請稍等。') + '</span>';
-  } else if (anom) {
-    cls += ' warn';
-    html = '<span class="txt">' + (mockNoKey ? '示範資料。' : '') + anom + '</span>' + (mockNoKey ? '<button type="button" data-act="paste-key">貼上金鑰</button>' : '<button type="button" data-act="tab-active">看進行中</button>');
-  } else if (mockNoKey) {
+  } else if (mockNoKey) {   // v73：進行中異常的黃色通知列拿掉，改成右上角小字＋進行中標籤變黃
+    void anom;
     cls += ' off';
     html = '<span class="txt">沒有金鑰，現在看到的是示範資料。</span><button type="button" data-act="paste-key">貼上金鑰</button>';
   } else if (S.net === 'ok' && S.slow) {
@@ -312,7 +329,7 @@ function card(it) {
     : '<div class="ca"><button class="go go-wide" data-act="dive" data-id="' + id + '" type="button" aria-label="深入了解「' + t + '」">' + IC.dive + '<span>深入了解</span></button></div>';
   return '<article class="card b-' + homeLane(it) + (S.fresh.has(it.id) ? ' fresh' : '') + '" data-id="' + id + '" data-lvl="' + lv + '" tabindex="0" aria-label="' + esc(it.title) + '">' +
     '<div class="c1"><span class="tm" data-cd="' + id + '" data-mode="short" data-lvl="' + lv + '">' + cdShort(it) + '</span>' + demo(it) + '</div>' +
-    cardOrg(it) + '<h3 class="sb">' + softBreak(it.title) + '</h3><div class="c3">' + amt(it) + method(it) + '</div>' + btns + '</article>';
+    cardOrg(it) + '<h3 class="sb">' + softBreak(it.title) + '</h3>' + btns + '</article>';   // v73：金額、招標方式收進抽屜（Borry「畫面簡潔一點點」）
 }
 function acard(it) {
   const lv = lvOf(it), id = esc(it.id), p = pv(it);
@@ -323,13 +340,13 @@ function acard(it) {
   else if (p.k === 'dlpass') meta = '<p class="meta-line fail-reason">公告截止時間已到，請確認是否已送出</p>';
   else if (folderWait(it)) meta = '<p class="meta-line"><span class="spin"></span>' + folderWaitText(it) + '</p>';
   else if (p.k === 'done') meta = '<p class="meta-line">' + (OUTCOME[it.progressOutcome] ? '已結案：<b>' + OUTCOME[it.progressOutcome] + '</b>' : '已完成') + (it.progressUpdatedAt ? '，<span data-rel="' + it.progressUpdatedAt + '">' + relTime(it.progressUpdatedAt, tnow()) + '</span>' : '') + '</p>';
-  else meta = '<p class="meta-line">' + byLine(it.progressUpdatedAt, it.progressUpdatedBy) + '</p>';
+  else meta = '';   // v73：誰更新、何時更新收進抽屜
   const sent = submitted(it);
   // 送件後（v4）：左上大字是目前步驟、旁邊狀態徽章；下一行倒數盯下一個里程碑，「已送件 11/10」縮成小標籤
   const top = sent
-    ? '<div class="c1 sent-top"><span class="step-big sb">' + softBreak(it.progressStage || '下一步') + '</span><span class="pst ' + p.cls + '">' + p.badge + '</span>' + demo(it) + '</div>' +
+    ? '<div class="c1 sent-top"><span class="step-big sb">' + softBreak(it.progressStage || '下一步') + '</span><span class="pst ' + p.cls + '">' + p.badge + '</span>' + demo1(it) + '</div>' +
       '<p class="stage sent-row"><span class="tm" data-cd="' + id + '" data-mode="short" data-lvl="' + lv + '">' + cdShort(it) + '</span><span class="sent-tag">' + esc(sentTag(it)) + '</span></p>'
-    : '<div class="c1"><span class="tm" data-cd="' + id + '" data-mode="short" data-lvl="' + lv + '">' + cdShort(it) + '</span>' + demo(it) + '</div>' +
+    : '<div class="c1"><span class="tm" data-cd="' + id + '" data-mode="short" data-lvl="' + lv + '">' + cdShort(it) + '</span>' + demo1(it) + '</div>' +
       '<p class="stage"><b>' + esc(it.progressStage || '建立工作區') + '</b><span class="pst ' + p.cls + '">' + p.badge + '</span></p>';
   return '<article class="card b-active' + (S.fresh.has(it.id) ? ' fresh' : '') + '" data-id="' + id + '" data-pst="' + p.bar + '" data-lvl="' + lv + '" tabindex="0" aria-label="' + esc(it.title) + '，' + p.badge + '">' + top +
     cardOrg(it) + '<h3 class="sb">' + softBreak(it.title) + '</h3>' +
@@ -361,8 +378,10 @@ function renderBoard() {
   if (m) msg.innerHTML = m.ic + '<h2>' + m.t + '</h2><p>' + m.p + '</p>' + m.btn;
 
   const listOf = k => k === 'active' ? sortActive(act.slice()) : sortList(all.filter(i => laneOf(i) === k));
-  $('#tabs').innerHTML = LANES.map(b => '<button class="tab b-' + b.k + '" type="button" role="tab" data-tab="' + b.k + '" aria-selected="' + (S.tab === b.k) + '">' +
-    (loadingEmpty ? '<b class="sk-n sk"></b>' : '<b>' + listOf(b.k).length + '</b>') + b.n + '</button>').join('');
+  const hot = !loadingEmpty && hasHot();
+  $('#tabs').innerHTML = LANES.map(b => '<button class="tab b-' + b.k + (b.k === 'active' && hot ? ' hot' : '') + '" type="button" role="tab" data-tab="' + b.k + '" aria-selected="' + (S.tab === b.k) + '"' + (b.k === 'active' && hot ? ' aria-label="進行中，有急件"' : '') + '>' +
+    (loadingEmpty ? '<b class="sk-n sk"></b>' : '<b>' + listOf(b.k).length + '</b>') + b.n + '</button>').join('') +
+    '<button class="tab tab-arch" type="button" data-act="open-arch" aria-haspopup="dialog">封存</button>';   // v73（Borry「封存可以放到盯案後續的右邊 我們往左滑才看得到」）
   $('#tabs').hidden = !!m;
   if (!m) lanes.innerHTML = LANES.map(b => {
     const list = listOf(b.k);
@@ -370,7 +389,7 @@ function renderBoard() {
       ? '<div class="zero">' + IC.inbox + '<b>目前沒有進行中的案子</b><span>在完整內容按「要做」之後，進度會出現在這一籃。</span></div>'
       : '<div class="zero">' + IC.inbox + '<b>這一籃目前是空的</b><span>' + TBD.laneEmpty + '</span></div>';
     const body = loadingEmpty ? skel() + skel() + skel() : list.length ? list.map(b.k === 'active' ? acard : card).join('') : zero;
-    return '<section class="lane b-' + b.k + (S.tab === b.k ? ' cur' : '') + '" data-l="' + b.k + '"><div class="lh"><h2><i class="ld"></i>' + b.n + (loadingEmpty ? '' : '<em>' + list.length + '</em>') + '</h2><div class="lh-row"><p>' + b.d + '</p>' + scanBox(b.k) + '</div></div><div class="lbody">' + body + '</div></section>';
+    return '<section class="lane b-' + b.k + (S.tab === b.k ? ' cur' : '') + '" data-l="' + b.k + '"><div class="lh"><h2><i class="ld"></i>' + b.n + (loadingEmpty ? '' : '<em>' + list.length + '</em>') + '</h2>' + scanBox(b.k) + '<p class="lh-d">' + b.d + '</p></div><div class="lbody">' + body + '</div></section>';
   }).join('');
   lanes.querySelectorAll('.lane').forEach(l => { const b = l.querySelector('.lbody'); if (keep[l.dataset.l]) b.scrollTop = keep[l.dataset.l]; });
   lanes.scrollLeft = left;
@@ -954,7 +973,27 @@ function chatDock(key) {
   return fab + '<div class="cs-scrim" data-act="dock-toggle" data-key="' + k + '" aria-hidden="true"></div>' +
     '<div class="csheet" role="dialog" aria-modal="true" aria-label="跟肉咖說"><div class="cs-h"><b>跟肉咖說</b>' + (it ? '<span class="cs-t">' + esc(nm(it)) + '</span>' : '') +
     '<button class="dock-close" data-act="dock-toggle" data-key="' + k + '" type="button">關閉</button></div>' +
+    (canDelMsg() && n ? '<button class="cs-clear" data-act="msg-clear" data-key="' + k + '" type="button">清空這張卡的對話</button>' : '') +
     '<div class="dock-th">' + list + '</div>' + input + '</div>';
+}
+// 刪對話（sql/33，只有 admin）：後端沒有這兩支函式時（PGRST202）整個藏起來
+const canDelMsg = () => can('admin') && !!api && !!api.msgDelete && !S.msgDelOff;
+async function doMsgDel() {
+  const d = S.dlg; if (!d || d.busy) return;
+  const key = d.id; S.dlg.busy = true; renderDlg();
+  try {
+    if (d.type === 'msgclear') { const r = await api.msgClear(key); toast('已清空這張卡的對話' + (r && r.deleted != null ? '（' + r.deleted + ' 則）' : '')); }
+    else { const r = await api.msgDelete(d.mid); toast('已刪掉' + (r && r.deleted > 1 ? '，連同回覆共 ' + r.deleted + ' 則' : '這則')); }
+    S.dlg = null; renderDlg();
+    await ensureMsgs(key, true); ensureMsgs('');
+  } catch (e) {
+    S.dlg = null; renderDlg();
+    if (/Could not find the function|PGRST202/i.test(e.message || '')) { S.msgDelOff = true; toast('刪對話的功能還沒開通', { bad: true }); renderDrawer(); return; }
+    if (e instanceof AdapterError && e.kind === 'auth') setAuth();
+    if (e instanceof AdapterError && e.kind === 'perm') loadWho();
+    toast('沒有刪掉：' + reason(e), { bad: true });
+    ensureMsgs(key, true);
+  }
 }
 function closeDock(k) {
   dockShow.delete(k);
@@ -973,8 +1012,9 @@ function msgLi(m, all) {
   const rk = m.author === RK;
   const st = m.pending ? MSG_ST.sending : rk ? '' : (MSG_ST[m.status] || '');
   const orig = rk && m.replyTo ? all.find(x => x.id === m.replyTo) : null;
+  const del = canDelMsg() && !m.pending && m.id ? '<button class="msg-del" data-act="msg-del" data-mid="' + esc(m.id) + '" data-key="' + esc(m.itemId || '') + '" type="button" aria-label="刪掉這則（連同回覆）">🗑</button>' : '';
   return '<li class="msg ' + (rk ? 'rk' : 'me') + (m.pending ? ' pending' : '') + '">' +
-    '<p class="msg-h"><b>' + esc(m.author || '不明') + '</b>' + (m.createdAt ? ' · <span data-rel="' + m.createdAt + '">' + relTime(m.createdAt, tnow()) + '</span>' : '') + '</p>' +
+    '<p class="msg-h"><b>' + esc(m.author || '不明') + '</b>' + (m.createdAt ? ' · <span data-rel="' + m.createdAt + '">' + relTime(m.createdAt, tnow()) + '</span>' : '') + del + '</p>' +
     (orig ? '<p class="msg-q">回覆「' + esc(orig.body.length > 24 ? orig.body.slice(0, 24) + '…' : orig.body) + '」</p>' : '') +
     '<div class="msg-b">' + para(m.body) + '</div>' + (st ? '<p class="msg-st">' + st + '</p>' : '') + '</li>';
 }
@@ -1078,18 +1118,20 @@ function scanBox(k) {
   const lastTxt = last ? '上次掃描 ' + (now - last < D ? hm(last) : fmtDate(last)) : '';
   let st = '';
   const res = x && (x.resultMain || (x.added == null ? '' : '新增 ' + x.added + ' 件'));
-  const det = x && x.resultDetail ? '<small class="scan-det">' + esc(x.resultDetail) + '</small>' : '';
-  if (scanning(k)) st = '<span class="spin" aria-hidden="true"></span>' + scanPhase(x) + '，全程約 ' + scanDur(k) + ' 分鐘';
-  else if (x && x.status === 'done' && x.doneAt && now - x.doneAt < SCAN_COOL) st = '<span>完成：' + esc(res || '沒有新的') + (lastTxt ? ' · ' + lastTxt : '') + det + '</span>';
-  else if (x && x.status === 'failed') st = '<span>失敗：' + esc(((x.resultMain || '') + (x.resultDetail ? '（' + x.resultDetail + '）' : '')) || '沒有回報原因') + (lastTxt ? ' · ' + lastTxt : '') + '</span>';
+  const det = x && x.resultDetail ? ' · ' + esc(x.resultDetail) : '';   // v73：判讀明細接在同一行，放不下就截斷
+  if (scanning(k)) st = scanPhase(x) + '，全程約 ' + scanDur(k) + ' 分鐘';
+  else if (x && x.status === 'done' && x.doneAt && now - x.doneAt < SCAN_COOL) st = (lastTxt ? lastTxt + ' · ' : '') + '完成：' + esc(res || '沒有新的') + det;
+  else if (x && x.status === 'failed') st = (lastTxt ? lastTxt + ' · ' : '') + '失敗：' + esc(((x.resultMain || '') + (x.resultDetail ? '（' + x.resultDetail + '）' : '')) || '沒有回報原因');
   else st = lastTxt;
   if (shared) st = (st ? st + ' · ' : '') + '跟補助徵件一起掃';
   const cool = last && now - last < SCAN_COOL;
+  // v73（Borry「立即掃描按鈕用重新整理的小符號跟一行小字…放一列在上面就好了」）：左邊上次掃描（太長截斷），右邊「↻ 立即掃描」完整留著
   const btn = !can('act') ? ''
-    : scanning(k) ? '<button class="scan-btn" type="button" disabled aria-disabled="true">' + scanPhase(x) + '</button>'
-    : cool ? '<button class="scan-btn" type="button" disabled aria-disabled="true" title="15 分鐘內掃過，晚點再掃">剛掃過</button>'
-    : '<button class="scan-btn" data-act="scan" data-lane="' + (shared ? 'grant' : k) + '" type="button" aria-label="立即掃描' + (shared ? LN.grant + '和' + LN.pitch : LN[k]) + '">立即掃描</button>';
-  return '<div class="scan" data-scan="' + k + '" aria-live="polite">' + btn + (st ? '<span class="scan-st">' + st + '</span>' : '') + '</div>';
+    : scanning(k) ? '<button class="scan-mini" type="button" disabled aria-disabled="true"><i class="rot spin-r" aria-hidden="true">↻</i>掃描中…</button>'
+    : cool ? '<button class="scan-mini" type="button" disabled aria-disabled="true" title="15 分鐘內掃過，晚點再掃"><i class="rot" aria-hidden="true">↻</i>剛掃過</button>'
+    : '<button class="scan-mini" data-act="scan" data-lane="' + (shared ? 'grant' : k) + '" type="button" aria-label="立即掃描' + (shared ? LN.grant + '和' + LN.pitch : LN[k]) + '"><i class="rot" aria-hidden="true">↻</i>立即掃描</button>';
+  const plain = st.replace(/<[^>]+>/g, '');
+  return '<div class="scan" data-scan="' + k + '" aria-live="polite"><span class="scan-st" title="' + plain + '">' + (st || '還沒掃過') + '</span>' + btn + '</div>';
 }
 function renderScan() { document.querySelectorAll('.scan[data-scan]').forEach(el => { const k = el.dataset.scan; el.outerHTML = scanBox(k); }); }
 async function loadScan() {
@@ -1146,7 +1188,8 @@ const purgeBtn = it => can('admin') ? '<button class="btn btn-ghost purge" data-
 function closeDlg() { S.dlg = null; renderDlg(); const d = $('#drawer.show'); if (d) d.querySelector('.xb')?.focus({ preventScroll: true }); }
 function renderDlg() {
   const wrap = $('#dlg'); if (!wrap) return;
-  const d = S.dlg, it = d && (d.type === 'fu' ? fuGet(d.id) : getAny(d.id));
+  const msgDlg = d => d.type === 'msgdel' || d.type === 'msgclear';   // 刪對話不需要卡片：全面板的訊息 data-key 是空字串（D 複審 v73）
+  const d = S.dlg, it = d && (d.type === 'fu' ? fuGet(d.id) : msgDlg(d) ? (getAny(d.id) || { title: '全面板', shortTitle: '全面板' }) : getAny(d.id));
   if (!d || !it) { wrap.hidden = true; S.dlg = null; return; }
   const box = wrap.querySelector('.dlg'), name = esc(shortName(it));
   const keepFocus = document.activeElement && box.contains(document.activeElement) ? document.activeElement.id : '';
@@ -1166,6 +1209,10 @@ function renderDlg() {
     html = '<h2 id="dlg-t">' + (done ? '標成完成' : '取消這件事') + '</h2><p class="dlg-p">「' + esc(it.title) + '」' + (it.owner ? '（' + esc(it.owner) + '）' : '') + '</p>' +
       '<label class="dlg-l" for="fu-note">' + (done ? '完成的依據' : '取消的原因') + '（選填）</label><input id="fu-note" class="dlg-in" type="text" maxlength="500" placeholder="' + (done ? '例如：群組 11/16 Louis 說已回' : '例如：改外景，不用了') + '" value="' + esc(d.note) + '">' +
       '<div class="dlg-acts"><button class="btn btn-ghost" data-act="dlg-close" type="button">返回</button><button class="btn btn-primary" data-act="fu-confirm" type="button">' + (done ? '標成完成' : '確定取消') + '</button></div>';
+  } else if (d.type === 'msgdel' || d.type === 'msgclear') {
+    const all = d.type === 'msgclear';
+    html = '<h2 id="dlg-t" class="danger">' + (all ? '清空這張卡的對話' : '刪掉這則訊息') + '</h2><p class="dlg-p">' + (all ? '「' + name + '」底下的對話會全部刪掉（包含肉咖的回覆和付款、步驟通知），無法復原。卡片、進度和付款紀錄不會動。' : '這則訊息和底下的回覆會一起刪掉，無法復原。') + '</p>' +
+      '<div class="dlg-acts"><button class="btn btn-ghost" data-act="dlg-close" type="button">取消</button><button class="btn btn-danger" data-act="msg-del-confirm" type="button"' + (d.busy ? ' disabled' : '') + '>' + (all ? '確定清空' : '確定刪掉') + '</button></div>';
   } else if (d.type === 'purge') {
     const ok = purgeOk(it, d.typed);
     html = '<h2 id="dlg-t" class="danger">徹底刪除</h2><p class="dlg-p">這會讓「' + name + '」從面板徹底消失，無法復原。電腦裡的資料夾和 Drive 檔案不會被刪。</p>' +
@@ -1362,8 +1409,8 @@ function renderFuBtn() {
   b.hidden = S.net === 'auth' || !api || !api.followupList;
   const l = S.fu.open || [], n = l.length, over = l.filter(fuOverdue).length, today = l.filter(fuToday).length;
   b.classList.toggle('hot', over > 0); b.classList.toggle('warn', !over && today > 0);
-  b.innerHTML = '<span class="full">追蹤事項</span><span class="short">追蹤</span>' + (n ? '<b class="fu-cnt">' + n + '</b>' : '');
-  b.setAttribute('aria-label', '追蹤事項' + (n ? '，' + n + ' 件未完成' + (over ? '，' + over + ' 件逾期' : '') + (today ? '，' + today + ' 件今天截止' : '') : ''));
+  b.innerHTML = '<span>追蹤公告</span>' + (n ? '<b class="fu-cnt">' + n + '</b>' : '');   // v73（Borry「追蹤的部分改成追蹤公告」）：只改名，功能不變
+  b.setAttribute('aria-label', '追蹤公告' + (n ? '，' + n + ' 件未完成' + (over ? '，' + over + ' 件逾期' : '') + (today ? '，' + today + ' 件今天截止' : '') : ''));
 }
 async function loadFu() {
   if (!api || !api.followupList || S.net === 'auth') return;
@@ -1632,6 +1679,11 @@ document.addEventListener('click', e => {
       case 'arch-back': openArchive(); break;
       case 'purge-start': S.dlg = { type: 'purge', id, typed: '' }; renderDlg(); break;
       case 'purge-confirm': doPurge(); break;
+      case 'msg-del': S.dlg = { type: 'msgdel', id: act.dataset.key || '', mid: act.dataset.mid }; renderDlg(); break;
+      case 'msg-clear': S.dlg = { type: 'msgclear', id: act.dataset.key || '' }; renderDlg(); break;
+      case 'msg-del-confirm': doMsgDel(); break;
+      case 'open-arch': openArchive(); break;
+      case 'open-hot': { const h = get(id); if (h) openDrawer(id, laneOf(h) === 'active' ? 'progress' : 'preview'); break; }
       case 'dock-toggle': { const k = act.dataset.key || ''; if (dockShow.has(k)) closeDock(k); else { dockShow.add(k); renderDrawer(); dockScroll($('#drawer')); markSeen(k); const t = $('#chat-input'); t && t.focus({ preventScroll: true }); } break; }
       case 'step-tog': { const k = id + '|' + (act.dataset.k || ''); stepOpen.has(k) ? stepOpen.delete(k) : stepOpen.add(k); if (stepOpen.has(k)) ensureEvents(id); renderDrawer(); $('#drawer [data-act=step-tog][data-k="' + CSS.escape(act.dataset.k || '') + '"]')?.focus({ preventScroll: true }); break; }
       case 'foot-more': footMore.open = !footMore.open; renderDrawer(); if (footMore.open) $('#drawer .fmenu .fm-i')?.focus({ preventScroll: true }); break;

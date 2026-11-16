@@ -32,7 +32,7 @@ export const CONFIG = {
   GONE_HOURS: 72,
   RPC: { whoami: 'opp_whoami', list: 'opp_list', get: 'opp_get', progress: 'opp_progress', topic: 'get_opp_realtime_topic',
          dive: 'opp_dive', stash: 'opp_stash', unstash: 'opp_unstash', drop: 'opp_drop', restore: 'opp_restore', build: 'opp_build',
-         msgAdd: 'opp_msg_add', msgList: 'opp_msg_list',   // 跟肉咖說（sql/24，C 做）
+         msgAdd: 'opp_msg_add', msgList: 'opp_msg_list', msgDelete: 'opp_msg_delete', msgClear: 'opp_msg_clear',   // 刪對話（sql/33，只有 admin）   // 跟肉咖說（sql/24，C 做）
          scanRequest: 'opp_scan_request', scanStatus: 'opp_scan_status',   // 立即掃描（C 做）
          archive: 'opp_archive', unarchive: 'opp_unarchive', archiveList: 'opp_archive_list', purge: 'opp_purge',   // 封存區與徹底刪除（sql/25）
          followupList: 'opp_followup_list', followupUpdate: 'opp_followup_update',
@@ -41,11 +41,10 @@ export const CONFIG = {
 };
 
 // 後端回來的英文名字或程式名 → 畫面上的顯示名。沒列到的照原字顯示。
-export const NICK = {
-  'Company Claude': '公司 Claude', 'company claude': '公司 Claude', 'company_claude': '公司 Claude', 'claude': '公司 Claude', 'Claude': '公司 Claude',
-  'system': '系統自動', 'System': '系統自動',
-};
-export const nick = n => NICK[n] || n;
+// v73：本機和系統做的（企劃流程-claude、mac-studio-3、找案子-bot、Fetcher、system、公司 Claude，任何含 claude、bot 的金鑰名）一律顯示「肉咖」；同事的金鑰名照原樣
+export const NICK = {};
+const SYS_NAME = /claude|(^|[^a-z])bot([^a-z]|$)|^mac-studio|^fetcher$|^system$|^planner$|企劃流程|系統自動/i;   // bot 只認獨立的字（找案子-bot、rouka-bot），Abbott、Robot 這類人名不換（D 複審）
+export const nick = n => !n ? n : NICK[n] || (SYS_NAME.test(String(n).trim()) ? '肉咖' : n);
 
 export class AdapterError extends Error {
   constructor(kind, message, status) { super(message); this.kind = kind; this.status = status; }
@@ -82,7 +81,7 @@ export async function createAdapter() {
   const configured = CONFIG.SUPABASE_URL.startsWith('http') && !CONFIG.SUPABASE_URL.includes('YOUR-PROJECT-REF') && !CONFIG.SUPABASE_ANON_KEY.startsWith('YOUR-');
   if (!configured) console.info('[好咖皮條客] adapter.js 的 SUPABASE_URL / SUPABASE_ANON_KEY 還是待填佔位，目前顯示示範資料');
   if (hasKey() && !forceMock && configured) return liveAdapter();
-  const { mockAdapter } = await import('./mock.js?v72');   // ?v 跟 sw.js 的 CACHE 一起換
+  const { mockAdapter } = await import('./mock.js?v73');   // ?v 跟 sw.js 的 CACHE 一起換
   return mockAdapter(forceMock ? mockFlag : '');
 }
 
@@ -119,7 +118,7 @@ const closedRow = r => r.progress_state === 'done' || r.progress_status === 'don
 //   rkText：只換標籤格式——行首、括號、引號或「｜·」後面緊接的「AI 判讀／判斷／AI：」，以及行首或「｜·」後面的「AI 區／處理中／負責」。用在 why、warn、first_step、進度備註、掃描結果。
 //   rkName：整欄都是本機產生的短欄（負責人、步驟名、目前階段、更新者），單獨的「AI」字都換。
 //   quick、facts、full_text、標題、機關是公告原文，一律不換。
-// D 複審 v72 第 4 點：括號、引號裡常是公告原文，只換「AI 判讀／判斷」和「AI：」；「區／處理中／負責」只在行首或｜·・後面才換；動詞（生成、產出…）一律不換
+// v73（D 複審 v72 第 4 點）：括號、引號裡常是公告原文，只換「AI 判讀／判斷」和「AI：」；「區／處理中／負責」只在行首或｜·・後面才換；動詞（生成、產出…）一律不換
 const RK_SEP_B = '(^|\\n|[（(「【｜|·・]\\s*)', RK_SEP_L = '(^|\\n|[｜|·・]\\s*)';
 const RK_JUDGE = new RegExp(RK_SEP_B + 'AI\\s*判[讀斷]', 'g');
 const RK_COLON = new RegExp(RK_SEP_B + 'AI\\s*(?=[：:])', 'g');
@@ -163,7 +162,7 @@ export function normalize(r) {
 // ---------- 跟肉咖說：訊息（opp_msg_list 回傳 {id, item_id, author, body, reply_to, status, handled_by, created_at}，新到舊） ----------
 export const RK = '肉咖';   // 肉咖回覆的 author
 export function normalizeMsg(m) {
-  return { id: str(m.id), itemId: m.item_id == null ? '' : str(m.item_id), author: str(m.author), body: str(m.body),
+  return { id: str(m.id), itemId: m.item_id == null ? '' : str(m.item_id), author: nick(str(m.author)), body: str(m.body),
     replyTo: m.reply_to == null ? '' : str(m.reply_to), status: str(m.status), handledBy: str(m.handled_by), createdAt: ts(m.created_at), itemShortTitle: str(m.item_short_title) };
 }
 const msgs = d => (Array.isArray(d) ? d : (d && Array.isArray(d.items) ? d.items : [])).filter(x => x && typeof x === 'object' && x.id != null).map(normalizeMsg);
@@ -218,7 +217,7 @@ export const normalizeArchived = r => normalize(Object.assign({}, r, { status: '
 export const FU_STATUS = ['open', 'done', 'dropped'];
 export function normalizeFollowup(f) {
   return { id: str(f.id), itemId: f.item_id == null ? '' : str(f.item_id), itemShortTitle: str(f.item_short_title), title: str(f.title),
-    owner: rkName(str(f.owner)), requestedBy: rkName(str(f.requested_by)), dueAt: ts(f.due_at), remindRule: str(f.remind_rule),
+    owner: rkName(nick(str(f.owner))), requestedBy: rkName(nick(str(f.requested_by))), dueAt: ts(f.due_at), remindRule: str(f.remind_rule),
     status: FU_STATUS.includes(f.status) ? f.status : 'open', source: str(f.source), note: str(f.note), closeNote: str(f.close_note),
     createdAt: ts(f.created_at), updatedAt: ts(f.updated_at), doneAt: ts(f.done_at), updatedBy: nick(str(f.updated_by)), overdue: !!f.overdue };
 }
@@ -273,6 +272,8 @@ function liveAdapter() {
     async progress(id) { return card(await rpc(R.progress, { p_id: id })); },
     // 跟肉咖說：itemId 空字串＝不綁案子（p_id 送 null）
     async msgList(itemId, limit) { return msgs(await rpc(R.msgList, { p_id: itemId || null, p_limit: limit || CONFIG.MSG_LIMIT })); },
+    async msgDelete(msgId) { return await rpc(R.msgDelete, { p_msg_id: msgId }); },   // → {deleted, item_id}
+    async msgClear(itemId) { return await rpc(R.msgClear, { p_id: itemId || null }); },   // → {deleted, item_id, scope}
     // 結案封存：opp_archive 要 act；opp_unarchive、opp_purge 要 admin；opp_archive_list 回已結案的卡
     async archive(id, kind, note) { return card(await rpc(R.archive, { p_id: id, p_kind: kind, p_note: note || null })); },
     async unarchive(id) { return card(await rpc(R.unarchive, { p_id: id })); },

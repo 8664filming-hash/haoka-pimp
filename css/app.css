@@ -741,3 +741,53 @@ p,li{text-wrap:pretty}
 .csheet .dock-th{flex:1 1 auto;min-height:64px;max-height:none;overflow:auto;overscroll-behavior:contain}
 .csheet .dock-th .msgs{margin:0;gap:8px}
 .kbopen .csheet{max-height:calc(100% - 8px)}
+
+/* ===== v73（Borry「我自己希望畫面簡潔一點點」＋六項）===== */
+/* 頂列：封存移到分頁列最右邊（桌機沒有分頁列，保留頂列的封存區）；手機頂列只剩追蹤公告、肉咖 */
+@media (max-width:959px){ .archbtn{display:none} }
+@media (max-width:520px){ .top{grid-template-columns:minmax(0,1fr) auto auto;grid-template-areas:"t f r" "l s s"} }
+#sum{min-width:0;overflow:hidden}
+/* 最緊急的一件：右上角一行小字，太長截斷，不換行 */
+.hot-line{display:block;max-width:100%;margin-left:auto;min-height:20px;padding:0;border:0;background:none;font:inherit;font-size:12.5px;font-weight:700;line-height:1.5;color:var(--hot);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right;cursor:pointer}
+/* 進行中有急件：標籤變黃（取代原本黃色通知列的「看進行中」） */
+.tab.hot{background:#ffe9a8;color:#4d3400}
+.tab.hot[aria-selected=true]{background:#ffe08a;border-color:#c99400}
+/* 分頁列：手機上可以左右滑，五籃剛好一屏，封存在最右邊要往左滑才看到 */
+@media (max-width:959px){
+  .tabs{display:flex;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;scrollbar-width:none;-webkit-overflow-scrolling:touch;min-width:0}
+  .tabs::-webkit-scrollbar{display:none}
+  .tab{flex:0 0 calc((100vw - 40px) / 5)}
+  .tab-arch{color:var(--mut);font-size:13.5px}
+  .lh-d{display:none}
+}
+/* 立即掃描：跟上次掃描同一行的小字；左邊截斷，右邊「↻ 立即掃描」完整留著 */
+.lh .scan{display:flex;align-items:center;gap:8px;min-width:0;margin-top:2px}
+.scan-st{flex:1 1 auto;min-width:0;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12.5px;color:var(--mut);line-height:1.5}
+.scan-mini{flex:none;display:inline-flex;align-items:center;gap:4px;min-height:36px;padding:0 2px;border:0;background:none;font:inherit;font-size:12.5px;font-weight:700;color:var(--ink);white-space:nowrap;cursor:pointer}
+.scan-mini:disabled{color:var(--mut);cursor:default}
+.scan-mini .rot{font-style:normal;font-size:15px;line-height:1;display:inline-block}
+.scan-mini .spin-r{animation:sp 1s linear infinite}
+/* 顏色只用在「急」（黃、紅）和「完成」（綠），其他一律灰階 */
+[data-lvl=calm]{--lv:var(--ink)}
+.card[data-lvl=calm]{border-left-color:#cfd9d5}
+.demo-badge{border-color:#b9c4c1;color:var(--mut);background:transparent}
+.link-badge{background:var(--stat);color:var(--mut)}
+.pst-on{background:var(--stat);color:var(--mut)}
+.chip{background:var(--stat);color:var(--mut)} .chip i{background:var(--mut)}
+.lane{border-top-color:#cfd9d5}
+.lh h2 .ld{background:var(--mut)}
+.lh h2 em{background:var(--stat);color:var(--mut)}
+.tab[aria-selected=true]{border-color:var(--ink)}
+.mini-link{color:var(--ink)}
+/* 檔案連結按鈕：兩顆並排各佔一半，標籤太長用省略號；三個以上往下一列 */
+.card-links,.fold-row.files .fold-acts,.arow-a{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.card-links .mini-link,.arow-a .mini-link,.fold-row.files .file-link{display:block;flex:none;min-width:0;min-height:40px;height:40px;line-height:37px;padding:0 10px;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center}
+/* 刪對話（admin） */
+.msg-h{display:flex;align-items:center;gap:4px}
+.msg-del{margin-left:auto;min-width:36px;min-height:32px;padding:0;border:0;background:none;font-size:15px;line-height:1;opacity:.7;cursor:pointer}
+.msg-del:hover{opacity:1}
+.cs-clear{align-self:flex-end;min-height:32px;padding:0 4px;border:0;background:none;font:inherit;font-size:13px;font-weight:700;color:var(--delc);cursor:pointer}
+.card[data-pst=hot]{border-left-color:var(--hot)}   /* 進行中卡這步逾期、截止已到：照急的顏色 */
+/* v73 複審（D）：桌機掃描文字長時「↻ 立即掃描」不要掉到第二行 */
+.lh .scan{flex-wrap:nowrap}
+.lh .scan .scan-st{flex:1 1 0}

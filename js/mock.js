@@ -32,7 +32,7 @@
 //   realbuild    要做之後照真卡流程：排隊 → 建立中 → 建好（看 3 秒快輪詢與第 1 步自動完成）
 //   folderslow   同 realbuild，但 12 秒後才建好
 //   live         9 秒後進來一張新卡（看新進光暈與 toast）
-import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq, normalizeArchived, normalizeFollowups, normalizeFollowup, normalizeEvents } from './adapter.js?v72';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
+import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq, normalizeArchived, normalizeFollowups, normalizeFollowup, normalizeEvents } from './adapter.js?v73';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
 
 const H = 3600e3, D = 24 * H, MIN = 60e3;
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -556,6 +556,21 @@ export function mockAdapter(modeStr) {
       if (flags.has('offline')) throw new AdapterError('network', '連不上伺服器');
       const l = msgs.filter(m => !itemId || m.item_id === itemId).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));   // 示意：p_id 空時回全部（前端自己分不綁案子的）
       return l.slice(0, limit || 50).map(normalizeMsg);
+    },
+    async msgDelete(msgId) {   // sql/33：刪一則連同底下所有回覆
+      await wait(250);
+      if (!flags.has('admin')) throw new AdapterError('perm', 'only an admin key can delete messages', 403);
+      const one = msgs.find(m => m.id === msgId); if (!one) throw new AdapterError('state', 'not found', 404);
+      const kill = new Set([msgId]); let grew = true;
+      while (grew) { grew = false; msgs.forEach(m => { if (m.reply_to && kill.has(m.reply_to) && !kill.has(m.id)) { kill.add(m.id); grew = true; } }); }
+      for (let i = msgs.length - 1; i >= 0; i--) if (kill.has(msgs[i].id)) msgs.splice(i, 1);
+      ping(); return { deleted: kill.size, item_id: one.item_id };
+    },
+    async msgClear(itemId) {
+      await wait(250);
+      if (!flags.has('admin')) throw new AdapterError('perm', 'only an admin key can delete messages', 403);
+      let n = 0; for (let i = msgs.length - 1; i >= 0; i--) if ((msgs[i].item_id || null) === (itemId || null)) { msgs.splice(i, 1); n++; }
+      ping(); return { deleted: n, item_id: itemId || null, scope: itemId ? 'item' : 'board' };
     },
     async msgAdd(itemId, body) {
       await wait(500); needAct();
