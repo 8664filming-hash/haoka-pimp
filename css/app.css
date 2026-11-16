@@ -685,3 +685,59 @@ p,li{text-wrap:pretty}
 .dock.show .dock-more.few{display:none}
 @media (max-width:959px) and (max-height:520px){ .dock.show .dock-th{display:block} }
 .kbopen .dock.show{max-height:calc(100dvh - var(--kb,0px) - 120px)}
+
+/* ===== v72（Borry 手機看 v71 的五點）：進度欄位加寬、步驟一行可展開、底欄縮成一列、跟肉咖說改浮動鈕＋底部彈窗 ===== */
+/* 1. 手機：抽屜左右留白縮小，進度卡用滿寬度；底下留浮動鈕的位置 */
+@media (max-width:959px){
+  .db{padding:12px 10px 72px}
+  .prog-box{padding:12px 10px}
+}
+.db{padding-bottom:72px}
+/* 步驟：一行摘要（名稱＋狀態、負責、期限），點了展開 */
+.step{display:block;padding:0;border-top:1px solid var(--line)}
+.step.current,.step.blocked{margin:0 -6px;padding:0 6px;border-radius:12px}
+.step-h{display:grid;grid-template-columns:24px minmax(0,1fr) 18px;gap:8px;align-items:center;width:100%;min-height:44px;padding:7px 0;background:none;border:0;font:inherit;color:inherit;text-align:left;cursor:pointer}
+.step-h:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:8px}
+.step-m{display:flex;flex-wrap:wrap;align-items:baseline;column-gap:10px;row-gap:0;min-width:0}
+.step .nm,.step.current .nm,.step.blocked .nm{font-size:15px;flex:0 1 auto;min-width:0;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.step .sub,.step.done .sub,.step.skipped .sub,.step.pending .sub{margin-left:auto;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;font-size:13px}
+.step .sub .st-now{color:var(--accent-dk)}
+.step .sub .st-blk{color:#6b4500}
+.step .chev{font-size:11px;color:var(--mut);text-align:center}
+.step .dot-s{margin-top:0}
+.step-acts{margin:0 0 8px 32px}
+.step-d{padding:2px 0 12px 32px;display:grid;gap:8px;font-size:14px}
+.sd-note{font-size:14.5px;line-height:1.6;color:var(--ink)}
+.sd-kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;line-height:1.5}
+.sd-kv dt{color:var(--mut);font-weight:700}
+.sd-kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.sd-links{display:flex;flex-wrap:wrap;gap:8px}
+.sd-hist .sd-h{font-weight:700;color:var(--mut);margin-bottom:2px}
+.sd-hist ol{list-style:none;margin:0;padding:0;display:grid;gap:3px;font-size:13.5px;line-height:1.5}
+.sd-hist li span{color:var(--mut);margin-right:6px}
+.sd-hist li b{margin-right:6px}
+.sd-empty{font-size:13px;color:var(--mut)}
+/* 2. 底欄：一列小按鈕，總高 44px 內（iPhone 底部 Home 列的安全區另計）；次要動作在「⋯」 */
+.df.mini{padding:3px 10px calc(env(safe-area-inset-bottom) + 3px);gap:6px;align-items:center;flex-wrap:nowrap}
+.fbtn{flex:none;height:36px;padding:0 12px;border-radius:10px;border:1.5px solid var(--line);background:var(--card);font:inherit;font-size:14px;font-weight:700;color:var(--accent-dk);white-space:nowrap}
+.fm-wrap{margin-left:auto;position:relative;flex:none}
+.fm-b{width:44px;padding:0;font-size:18px;line-height:1;color:var(--ink)}
+.fmenu{position:absolute;right:0;bottom:calc(100% + 6px);min-width:168px;padding:6px;display:grid;gap:2px;background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:0 10px 28px -10px rgba(29,51,49,.45);z-index:8}
+.fm-i,.df.mini .fmenu .btn{display:block;width:100%;min-height:44px;flex:none;padding:0 12px;margin:0;border:0;border-radius:8px;background:none;font:inherit;font-size:15px;font-weight:700;text-align:left;color:var(--ink)}
+.fm-i:hover,.df.mini .fmenu .btn:hover{background:var(--first)}
+.df.mini .fmenu .purge{color:var(--delc)}
+@media (min-width:960px){ .df.mini{padding:8px 24px} }
+@media (max-width:959px) and (max-height:520px){ .df.mini{padding:3px 16px calc(env(safe-area-inset-bottom) + 3px)} }
+/* 3. 跟肉咖說：浮動小按鈕；點了是底部彈窗 */
+.fab-wrap{position:relative;height:0;flex:none;z-index:3}
+.rk-fab{position:absolute;right:12px;bottom:10px;min-height:40px;padding:0 14px;border-radius:999px;border:0;background:var(--accent-dk);color:#fff;font:inherit;font-size:14.5px;font-weight:800;white-space:nowrap;box-shadow:0 6px 16px -6px rgba(29,51,49,.55)}
+.rk-fab .fab-d{font-weight:700;opacity:.9}
+.rk-fab .dock-dot{position:absolute;top:2px;right:4px}
+.cs-scrim{position:absolute;inset:0;background:var(--scrim);border-radius:inherit;z-index:6}
+.csheet{position:absolute;left:0;right:0;bottom:0;max-height:80%;z-index:7;display:flex;flex-direction:column;gap:8px;padding:10px 14px calc(env(safe-area-inset-bottom) + 10px);background:var(--sheet);border-radius:20px 20px 0 0;box-shadow:0 -14px 30px -14px rgba(29,51,49,.45)}
+.cs-h{display:flex;align-items:center;gap:8px;min-width:0;font-size:15px}
+.cs-t{flex:1;min-width:0;font-size:13px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.csheet .dock-close{margin-left:auto;min-height:40px;padding:0 14px}
+.csheet .dock-th{flex:1 1 auto;min-height:64px;max-height:none;overflow:auto;overscroll-behavior:contain}
+.csheet .dock-th .msgs{margin:0;gap:8px}
+.kbopen .csheet{max-height:calc(100% - 8px)}

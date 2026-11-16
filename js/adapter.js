@@ -14,6 +14,7 @@
 //   await api.msgList(itemId, n) → 跟肉咖說的訊息（新到舊）；await api.msgAdd(itemId, body) → 新訊息或 null
 //   await api.archive(id, kind, note)／unarchive(id)／archiveList(q, year, n)／purge(id, 短案名) → 封存區與徹底刪除
 //   await api.scanStatus() → 三籃掃描狀態；await api.scanRequest(lane) → 該籃的新狀態或 null
+//   await api.events(id, n) → 這張卡的紀錄 [{at, actor, action, detail}]，新到舊（opp_events，sql/29）
 //   api.subscribe(onPing, onState)→ 取消函式；onPing() 代表「有變動，請重抓」，onState(bool) 代表即時連線狀態
 //   網頁端沒有任何寫入進度的呼叫：進度只由企劃流程用 planner 金鑰回寫。
 // =====================================================================
@@ -34,7 +35,8 @@ export const CONFIG = {
          msgAdd: 'opp_msg_add', msgList: 'opp_msg_list',   // 跟肉咖說（sql/24，C 做）
          scanRequest: 'opp_scan_request', scanStatus: 'opp_scan_status',   // 立即掃描（C 做）
          archive: 'opp_archive', unarchive: 'opp_unarchive', archiveList: 'opp_archive_list', purge: 'opp_purge',   // 封存區與徹底刪除（sql/25）
-         followupList: 'opp_followup_list', followupUpdate: 'opp_followup_update' },   // 追蹤事項（sql/27，C 做）   // 封存區與徹底刪除（sql/25，C 做）
+         followupList: 'opp_followup_list', followupUpdate: 'opp_followup_update',
+         events: 'opp_events' },   // 卡片紀錄（sql/29，D 做；viewer 以上可讀）   // 追蹤事項（sql/27，C 做）   // 封存區與徹底刪除（sql/25，C 做）
   MSG_LIMIT: 50,
 };
 
@@ -80,7 +82,7 @@ export async function createAdapter() {
   const configured = CONFIG.SUPABASE_URL.startsWith('http') && !CONFIG.SUPABASE_URL.includes('YOUR-PROJECT-REF') && !CONFIG.SUPABASE_ANON_KEY.startsWith('YOUR-');
   if (!configured) console.info('[好咖皮條客] adapter.js 的 SUPABASE_URL / SUPABASE_ANON_KEY 還是待填佔位，目前顯示示範資料');
   if (hasKey() && !forceMock && configured) return liveAdapter();
-  const { mockAdapter } = await import('./mock.js?v71');   // ?v 跟 sw.js 的 CACHE 一起換
+  const { mockAdapter } = await import('./mock.js?v72');   // ?v 跟 sw.js 的 CACHE 一起換
   return mockAdapter(forceMock ? mockFlag : '');
 }
 
@@ -105,14 +107,25 @@ const PROG_ST = ['none', 'queued', 'active', 'blocked', 'overdue', 'done', 'fail
 function steps(v) {
   if (!Array.isArray(v)) return null;          // null = 這次回傳沒帶步驟（opp_list），前端要另外去拿
   return v.filter(s => s && typeof s === 'object').map(s => ({
-    key: str(s.key), name: str(s.name) || str(s.key), status: STEP_ST.includes(s.status) ? s.status : 'pending',
-    dueAt: ts(s.due_at), doneAt: ts(s.done_at), owner: nick(str(s.owner)), note: str(s.note),
+    key: str(s.key), name: rkName(str(s.name) || str(s.key)), status: STEP_ST.includes(s.status) ? s.status : 'pending',
+    dueAt: ts(s.due_at), doneAt: ts(s.done_at), owner: rkName(nick(str(s.owner))), note: rkText(str(s.note)),
+    sign: rkText(str(s.sign || s.signers || s.needs_sign || '')),   // 需簽章（C 加；沒有獨立欄位時從備註「需簽章：…」取）
   }));
 }
 
 const closedRow = r => r.progress_state === 'done' || r.progress_status === 'done';
-// 顯示用：後端文字裡的「AI 判讀／AI 判斷／AI：」一律顯示成「肉咖判讀／肉咖：」（Borry「卡片資料裡面的AI判讀，請多改成肉咖判讀」）。資料本身不改
-export const rkText = v => typeof v === 'string' ? v.replace(/AI\s*判[讀斷]/g, '肉咖判讀').replace(/(^|[\s，。、；（(「])AI\s*[：:]/g, '$1肉咖：') : v;
+// 顯示用：本機（肉咖、F、C）自己產生的「AI」標籤一律顯示成「肉咖」，資料本身不改。
+// v72（Borry「所有AI負責的部分如果是本機那邊在執行的話請用肉咖取代AI二字」；D 複審 v71：標案內文裡的 AI 不要動）：
+//   rkText：只換標籤格式——行首、括號、引號或「｜·」後面緊接的「AI 判讀／判斷／AI：」，以及行首或「｜·」後面的「AI 區／處理中／負責」。用在 why、warn、first_step、進度備註、掃描結果。
+//   rkName：整欄都是本機產生的短欄（負責人、步驟名、目前階段、更新者），單獨的「AI」字都換。
+//   quick、facts、full_text、標題、機關是公告原文，一律不換。
+// D 複審 v72 第 4 點：括號、引號裡常是公告原文，只換「AI 判讀／判斷」和「AI：」；「區／處理中／負責」只在行首或｜·・後面才換；動詞（生成、產出…）一律不換
+const RK_SEP_B = '(^|\\n|[（(「【｜|·・]\\s*)', RK_SEP_L = '(^|\\n|[｜|·・]\\s*)';
+const RK_JUDGE = new RegExp(RK_SEP_B + 'AI\\s*判[讀斷]', 'g');
+const RK_COLON = new RegExp(RK_SEP_B + 'AI\\s*(?=[：:])', 'g');
+const RK_LBL = new RegExp(RK_SEP_L + 'AI\\s*(?=區|處理中|負責)', 'g');
+export const rkText = v => typeof v === 'string' ? v.replace(RK_JUDGE, '$1肉咖判讀').replace(RK_COLON, '$1肉咖').replace(RK_LBL, '$1肉咖') : v;
+export const rkName = v => typeof v === 'string' ? rkText(v).replace(/(^|[^A-Za-z\-])AI(?![A-Za-z0-9\-])(?:\s+(?=[^\x00-\x7F]))?/g, '$1肉咖') : v;
 const rkArr = a => a.map(rkText);
 export function normalize(r) {
   const status = r.status === 'stashed' ? 'snoozed' : (['new', 'doing', 'dropped', 'expired'].includes(r.status) ? r.status : 'new');
@@ -124,7 +137,7 @@ export function normalize(r) {
     deadline: ts(r.deadline), deadlineText: str(r.deadline_text), deadlineApprox: !!r.deadline_approx,
     expiresAt: ts(r.expire_at), snoozeUntil: ts(r.remind_at), stashDueAt: ts(r.stash_due_at), decidedAt: ts(r.decided_at),
     sourceUrl: safeUrl(r.source_url), sourceSite: str(r.source_site), foundBy: nick(str(r.found_by)), foundAt: ts(r.created_at), isDemo: !!r.is_demo,
-    why: rkText(str(r.why)), quick: rkArr(arr(r.quick)), facts: rkArr(arr(r.facts)), warn: rkArr(arr(r.warn)), firstStep: rkText(str(r.first_step)), fit: rkText(str(r.fit)),
+    why: rkText(str(r.why)), quick: arr(r.quick), facts: arr(r.facts), warn: rkArr(arr(r.warn)), firstStep: rkText(str(r.first_step)), fit: rkText(str(r.fit)),
     // 標案結構化欄位（公司版新增）。honor（導演地位）公司版不用，前端忽略。
     caseNo: str(r.case_no), tenderMethod: str(r.tender_method), bidBond: str(r.bid_bond), performancePeriod: str(r.performance_period), qualification: str(r.qualification),
     crawlStatus: str(r.crawl_status) || 'none', crawlError: str(r.crawl_error), hasFullText: !!r.has_full_text,
@@ -138,11 +151,11 @@ export function normalize(r) {
     dropReason: str(r.drop_reason),
     // 進度摘要（opp_list 每張 doing 卡都有）。progress_status 由後端 _opp_card 現算，前端照用。
     progressStatus: PROG_ST.includes(r.progress_status) ? r.progress_status : (status === 'doing' ? 'active' : 'none'),
-    progressState: str(r.progress_state), progressStage: str(r.progress_stage), progressStageKey: str(r.progress_stage_key),
+    progressState: str(r.progress_state), progressStage: rkName(str(r.progress_stage)), progressStageKey: str(r.progress_stage_key),
     progressPct: int(r.progress_pct), progressStepN: int(r.progress_step_n), progressStepTotal: int(r.progress_step_total),
-    progressNote: rkText(str(r.progress_note)), progressBlocker: str(r.progress_blocker), progressOutcome: str(r.progress_outcome),
+    progressNote: rkText(str(r.progress_note)), progressBlocker: rkText(str(r.progress_blocker)), progressOutcome: str(r.progress_outcome),
     progressDueAt: ts(r.progress_due_at), progressArchiveAt: ts(r.progress_archive_at),
-    progressUpdatedAt: ts(r.progress_updated_at), progressUpdatedBy: nick(str(r.progress_updated_by)),
+    progressUpdatedAt: ts(r.progress_updated_at), progressUpdatedBy: rkName(nick(str(r.progress_updated_by))),
     progressSteps: steps(r.progress_steps),
   };
 }
@@ -205,10 +218,13 @@ export const normalizeArchived = r => normalize(Object.assign({}, r, { status: '
 export const FU_STATUS = ['open', 'done', 'dropped'];
 export function normalizeFollowup(f) {
   return { id: str(f.id), itemId: f.item_id == null ? '' : str(f.item_id), itemShortTitle: str(f.item_short_title), title: str(f.title),
-    owner: str(f.owner), requestedBy: str(f.requested_by), dueAt: ts(f.due_at), remindRule: str(f.remind_rule),
+    owner: rkName(str(f.owner)), requestedBy: rkName(str(f.requested_by)), dueAt: ts(f.due_at), remindRule: str(f.remind_rule),
     status: FU_STATUS.includes(f.status) ? f.status : 'open', source: str(f.source), note: str(f.note), closeNote: str(f.close_note),
     createdAt: ts(f.created_at), updatedAt: ts(f.updated_at), doneAt: ts(f.done_at), updatedBy: nick(str(f.updated_by)), overdue: !!f.overdue };
 }
+// ---------- 卡片紀錄（sql/29）：opp_events 回 [{at, item_id, actor, action, detail}]，新到舊 ----------
+export const normalizeEvents = d => (Array.isArray(d) ? d : (d && Array.isArray(d.items) ? d.items : [])).filter(x => x && typeof x === 'object' && x.action)
+  .map(e => ({ at: ts(e.at), itemId: str(e.item_id), actor: rkName(nick(str(e.actor))), action: str(e.action), detail: e.detail && typeof e.detail === 'object' ? e.detail : {} }));
 export const normalizeFollowups = d => (Array.isArray(d) ? d : (d && Array.isArray(d.items) ? d.items : [])).filter(x => x && typeof x === 'object' && x.id != null).map(normalizeFollowup);
 
 // ---------- 真後端（Supabase REST + Realtime） ----------
@@ -263,6 +279,7 @@ function liveAdapter() {
     async archiveList(q, year, limit) { const d = await rpc(R.archiveList, { p_q: q || null, p_year: year || null, p_limit: limit || 100 }); return (Array.isArray(d) ? d : (d && Array.isArray(d.items) ? d.items : [])).filter(x => x && x.id).map(normalizeArchived); },
     // 追蹤事項：讀 viewer 以上；改只有 planner 或 admin（其他回 28000 → 403）
     async followupList(status, itemId, limit) { return normalizeFollowups(await rpc(R.followupList, { p_status: status || 'open', p_item_id: itemId || null, p_limit: limit || 200 })); },
+    async events(id, limit) { return normalizeEvents(await rpc(R.events, { p_id: id, p_limit: limit || 100 })); },
     async followupUpdate(fid, patch) { const d = await rpc(R.followupUpdate, { p_fid: fid, p_patch: patch }); const one = Array.isArray(d) ? d[0] : d; return one && typeof one === 'object' && one.id != null ? normalizeFollowup(one) : null; },
     async purge(id, title) { return await rpc(R.purge, { p_id: id, p_confirm_title: title }); },
     async scanStatus() { return normalizeScans(await rpc(R.scanStatus, {})); },

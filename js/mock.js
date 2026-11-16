@@ -32,7 +32,7 @@
 //   realbuild    要做之後照真卡流程：排隊 → 建立中 → 建好（看 3 秒快輪詢與第 1 步自動完成）
 //   folderslow   同 realbuild，但 12 秒後才建好
 //   live         9 秒後進來一張新卡（看新進光暈與 toast）
-import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq, normalizeArchived, normalizeFollowups, normalizeFollowup } from './adapter.js?v71';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
+import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq, normalizeArchived, normalizeFollowups, normalizeFollowup, normalizeEvents } from './adapter.js?v72';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
 
 const H = 3600e3, D = 24 * H, MIN = 60e3;
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -198,9 +198,10 @@ function build() {
     progress_note: '資格審查通過，進入評選，要準備簡報。', progress_updated_at: ago(3), progress_updated_by: 'Company Claude' }, 'tender', 1, {});
   sent.progress_steps = [
     st('create_workspace', '建立工作區', 'done', { done_at: ago(11 * 24) }), st('read_tender_docs', '讀招標文件', 'done', { done_at: ago(10 * 24) }),
-    st('write_proposal', '撰寫企劃與估價', 'done', { done_at: ago(8 * 24) }), st('seal_submit', '用印與送件', 'done', { done_at: ago(6 * 24) }),
-    st('qualify', '資格審查', 'done', { done_at: ago(20) }),
-    st('pitch_prep', '評選簡報準備', 'current', { due_at: qflag.includes('sentnodue') ? null : iso(now + 2 * D + 2 * H), owner: 'Company Claude', note: '簡報稿與分鏡要先給內審' }),
+    st('write_proposal', '撰寫企劃與估價', 'done', { done_at: ago(8 * 24), owner: 'AI', note: 'AI 區產出企劃初稿與估價單，Louis 內審過。' }),
+    st('seal_submit', '用印與送件', 'done', { done_at: ago(6 * 24), owner: 'CC', due_at: ago(6 * 24 - 5), note: '用印 CC 追；需簽章：張佑維（石頭）負責人章、Borry 附件三同意書簽名。依決策卡 v4' }),
+    st('qualify', '資格審查', 'done', { done_at: ago(20), owner: '機關' }),
+    st('pitch_prep', '評選簡報準備', 'current', { due_at: qflag.includes('sentnodue') ? null : iso(now + 2 * D + 2 * H), owner: 'AI', note: '簡報稿與分鏡要先給內審。標案說明寫「本案鼓勵運用 AI 工具」，這句是公告原文，不換字。內審資料夾：https://drive.google.com/drive/folders/demo-pitch' }),
     st('pitch_present', '評選簡報', 'pending'), st('await_opening', '等待開標', 'pending'), st('result', '決標或結案', 'pending'),
   ];
   rows.push(sent);
@@ -534,6 +535,21 @@ export function mockAdapter(modeStr) {
       if (patch.status === 'open') f.done_at = null; else if (patch.status) f.done_at = iso(Date.now());
       ping();
       return normalizeFollowup(fuOut(f));
+    },
+    async events(id, limit) {   // 示意紀錄（opp_events，新到舊）。step:* 是給步驟細節用的格式草案（後端還沒寫，見回報 v72）
+      await wait(120);
+      if (flags.has('offline')) throw new AdapterError('network', '連不上伺服器');
+      if (flags.has('evfail')) throw new AdapterError('server', '伺服器沒有回應');
+      const t = Date.now(), h = 3600e3, at = x => iso(t - x * h);
+      const ev = id !== 'demo-a10' ? [{ at: at(30), item_id: id, actor: 'Company Claude', action: 'added', detail: {} }] : [
+        { at: at(3), item_id: id, actor: 'AI', action: 'step:current', detail: { step_key: 'pitch_prep', step_name: '評選簡報準備', from: 'pending', note: null, as: 'planner' } },
+        { at: at(20), item_id: id, actor: '企劃流程', action: 'step:done', detail: { step_key: 'qualify', step_name: '資格審查', from: 'current', note: null, as: 'planner' } },
+        { at: at(6 * 24), item_id: id, actor: 'CC', action: 'step:done', detail: { step_key: 'seal_submit', step_name: '用印與送件', from: 'current', note: '石頭用印完成、已寄出', as: 'owner' } },
+        { at: at(6 * 24 + 20), item_id: id, actor: 'CC', action: 'step:undone', detail: { step_key: 'seal_submit', step_name: '用印與送件', from: 'done', note: '附件三少簽名，退回', as: 'owner' } },
+        { at: at(11 * 24), item_id: id, actor: 'mac-studio-3', action: 'folder:done', detail: {} },
+        { at: at(11 * 24 + 1), item_id: id, actor: 'Borry', action: 'status:doing', detail: {} },
+      ];
+      return normalizeEvents(ev.slice(0, limit || 100));
     },
     async msgList(itemId, limit) {
       await wait(120);
