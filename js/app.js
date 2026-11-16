@@ -1,6 +1,6 @@
 // 好咖皮條客主程式：狀態、畫面、事件。只透過 adapter.js 取得與寫入資料。版面規格見交接包 DESIGN.md。
-import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl, RK, SCAN_LANES } from './adapter.js?v75';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
-import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v75';
+import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl, RK, SCAN_LANES } from './adapter.js?v80';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
+import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v80';
 
 const $ = s => document.querySelector(s);
 const LANES = [
@@ -98,13 +98,27 @@ const S = {
   fu: { open: null, list: null, filter: 'open', busy: false, err: false, byItem: new Map(), ticket: 0 },   // 追蹤事項（v7）：open＝頂列數字用，list＝抽屜目前篩選
   scan: {}, scanBusy: new Set(),   // 立即掃描：三籃最新狀態
   arch: { list: null, q: '', year: '', busy: false }, archMap: new Map(), dlg: null,   // 封存區、結案與徹底刪除的確認框
-  msgs: new Map(), msgBusy: new Set(), pend: new Map(), draft: new Map(), events: new Map(), evBusy: new Set(),   // 跟肉咖說：key＝卡片 id（不綁案子是 ''）   // attOpen：附件清單展開中的卡（重畫時保留）
+  msgs: new Map(), msgBusy: new Set(), pend: new Map(), draft: new Map(), events: new Map(), evBusy: new Set(),
+  bidPage: null, bidForm: { amount: '', receipt: '', note: '' }, bidSumOpen: new Set(), mine: false, presence: null, presOpen: new Set(), presOff: false,   // v8   // 跟肉咖說：key＝卡片 id（不綁案子是 ''）   // attOpen：附件清單展開中的卡（重畫時保留）
 };
 let api, lastFocus = null, depth = 0, ignorePop = false;
 const locks = new Set(), mutDone = {};
 let OFF = 0;                                   // 伺服器時間與本機時間的差，倒數用校正後的時間
 const tnow = () => Date.now() + OFF;
 const can = k => !!(S.caps && S.caps[k]);      // 依 opp_whoami 決定畫不畫按鈕；viewer 只有 read
+// v8：「我負責的步驟」——步驟 owner 照 sql/32 的規則比對 whoami 的 aliases（多人用 、，,／/;；&＋+ 分隔，不分大小寫、去掉空白）
+const normName = x => String(x || '').replace(/\s/g, '').toLowerCase();
+const myNames = () => new Set(((S.who && S.who.aliases && S.who.aliases.length ? S.who.aliases : S.who && S.who.role ? [S.who.role] : [])).map(normName).filter(Boolean));
+const ownerIsMe = s => { const me = myNames(); return !!me.size && String(s.ownerRaw || '').split(/[、，,／/;；&＋+]/).some(x => me.has(normName(x))); };
+const stepOpenNow = s => s.status === 'current' || s.status === 'blocked';   // 等你確認：只算目前這一步（或卡住的那步），之後的步驟還輪不到
+const mineSteps = it => (it.progressSteps || []).filter(s => stepOpenNow(s) && ownerIsMe(s));
+const canMarkStep = (s, it) => it && it.status === 'doing' && it.progressStatus !== 'done' && (can('admin') || can('progress') || (can('act') && ownerIsMe(s)));
+const trackLabel = l => String(l || '').replace(/\S*:\/\/\S*|www\.\S*/gi, '').trim().slice(0, 60) || '檔案';
+function track(id, action, stepKey, label) {   // sql/34：先送、不等回應，失敗也不擋開檔
+  if (!api || !api.track || !id) return;
+  const d = {}; if (stepKey) d.step_key = stepKey; if (label) d.label = trackLabel(label);
+  try { Promise.resolve(api.track(id, action, Object.keys(d).length ? d : null)).catch(() => {}); } catch (e) {}
+}
 const canBuild = it => can('act') && (it.lane !== 'tender' || can('admin') || can('build_tender'));   // 政府標案的「要做」：admin 或 caps.build_tender（sql/21、28）；舊後端沒回 build_tender 就當 false
 
 const items = () => [...S.items.values()];
@@ -215,7 +229,7 @@ const chip = it => { const l = homeLane(it); return '<span class="chip b-' + l +
 // F 的盯案後續：正式公告上看板時，why 開頭會寫明兩張卡接上了，在標籤列標出來
 const linkTag = it => /^（之前在盯案後續/.test(it.why) ? '<span class="link-badge">之前在盯案後續</span>' : /^正式公告已上看板/.test(it.why) ? '<span class="link-badge">正式公告已上看板</span>' : '';
 const demo = it => linkTag(it) + (it.isDemo ? '<span class="demo-badge">示意資料</span>' : '');
-const demo1 = it => linkTag(it) || (it.isDemo ? '<span class="demo-badge">示意資料</span>' : '');   // 進行中卡已有狀態徽章：再多一個就好（徽章最多 2 個）
+const demo1 = it => (mineSteps(it).length ? '<span class="mine-badge">等你確認</span>' : '') || linkTag(it) || (it.isDemo ? '<span class="demo-badge">示意資料</span>' : '');   // 等你確認優先（徽章最多 2 個）   // 進行中卡已有狀態徽章：再多一個就好（徽章最多 2 個）
 const orgLine = it => it.org && !it.title.includes(it.org) ? '<p class="dt-org">' + esc(it.org) + '</p>' : '';
 const cardOrg = it => it.org && !it.title.includes(it.org) ? '<p class="org">' + esc(it.org) + '</p>' : '';
 function amt(it) {
@@ -267,7 +281,7 @@ function urgentOne() {   // v74（Borry「截止日要放的是進行中的！�
   const { it, at } = c[0];
   const lab = !submitted(it) && it.deadline === at ? '截止' : milestone(it);
   const n = nm(it), sn = n.length > 8 ? n.slice(0, 8) + '…' : n;
-  return { it, txt: sn + ' ' + fmtDay(at) + hm(at) + ' ' + lab + '・剩 ' + shortLeft(at - now) };
+  return { it, txt: '剩 ' + shortLeft(at - now) + '｜' + sn + ' ' + fmtDay(at) + hm(at) + ' ' + lab };
 }
 function dayClock(t) {   // 今天 10:00／明天 10:00／11/20 10:00（台北時間）
   const dd = Math.floor((t + 8 * H) / D) - Math.floor((tnow() + 8 * H) / D);
@@ -334,7 +348,7 @@ function card(it) {
     : '<div class="ca"><button class="go go-wide" data-act="dive" data-id="' + id + '" type="button" aria-label="深入了解「' + t + '」">' + IC.dive + '<span>深入了解</span></button></div>';
   return '<article class="card b-' + homeLane(it) + (S.fresh.has(it.id) ? ' fresh' : '') + '" data-id="' + id + '" data-lvl="' + lv + '" tabindex="0" aria-label="' + esc(it.title) + '">' +
     '<div class="c1"><span class="tm" data-cd="' + id + '" data-mode="short" data-lvl="' + lv + '">' + cdShort(it) + '</span>' + demo(it) + '</div>' +
-    cardOrg(it) + '<h3 class="sb">' + softBreak(it.title) + '</h3>' + btns + '</article>';   // v73：金額、招標方式收進抽屜（Borry「畫面簡潔一點點」）
+    cardOrg(it) + '<h3 class="sb">' + softBreak(it.title) + '</h3>' + bidLine(it) + btns + '</article>';   // v73：金額、招標方式收進抽屜（Borry「畫面簡潔一點點」）
 }
 function acard(it) {
   const lv = lvOf(it), id = esc(it.id), p = pv(it);
@@ -354,7 +368,7 @@ function acard(it) {
     : '<div class="c1"><span class="tm" data-cd="' + id + '" data-mode="short" data-lvl="' + lv + '">' + cdShort(it) + '</span>' + demo1(it) + '</div>' +
       '<p class="stage"><b>' + esc(it.progressStage || '建立工作區') + '</b><span class="pst ' + p.cls + '">' + p.badge + '</span></p>';
   return '<article class="card b-active' + (S.fresh.has(it.id) ? ' fresh' : '') + '" data-id="' + id + '" data-pst="' + p.bar + '" data-lvl="' + lv + '" tabindex="0" aria-label="' + esc(it.title) + '，' + p.badge + '">' + top +
-    cardOrg(it) + '<h3 class="sb">' + softBreak(it.title) + '</h3>' +
+    cardOrg(it) + '<h3 class="sb">' + softBreak(it.title) + '</h3>' + bidLine(it) +
     '<div class="prog-row"><div class="pbar" aria-hidden="true"><i style="width:' + pct(it) + '%"></i></div><span class="frac">' + fracText(it) + '</span></div>' +
     meta + '<div class="ca">' + (payUrl(it) ? '<a class="go go-wide pay-link" href="' + esc(payUrl(it)) + '" target="_blank" rel="noopener noreferrer" aria-label="「' + esc(nm(it)) + '」去領標付款">去領標付款</a>' : '') +
     '<button class="go go-wide' + (payUrl(it) ? ' alt' : '') + '" data-act="open-progress" data-id="' + id + '" type="button" aria-label="看「' + esc(nm(it)) + '」的進度">看進度</button></div>' +
@@ -382,7 +396,9 @@ function renderBoard() {
   msg.hidden = !m; lanes.hidden = !!m;
   if (m) msg.innerHTML = m.ic + '<h2>' + m.t + '</h2><p>' + m.p + '</p>' + m.btn;
 
-  const listOf = k => k === 'active' ? sortActive(act.slice()) : sortList(all.filter(i => laneOf(i) === k));
+  const mineN = act.filter(i => mineSteps(i).length).length;
+  if (S.mine && !mineN) S.mine = false;
+  const listOf = k => k === 'active' ? sortActive(act.slice()).filter(i => !S.mine || mineSteps(i).length) : sortList(all.filter(i => laneOf(i) === k));
   const hot = !loadingEmpty && hasHot();
   $('#tabs').innerHTML = LANES.map(b => '<button class="tab b-' + b.k + (b.k === 'active' && hot ? ' hot' : '') + '" type="button" role="tab" data-tab="' + b.k + '" aria-selected="' + (S.tab === b.k) + '"' + (b.k === 'active' && hot ? ' aria-label="進行中，有急件"' : '') + '>' +
     (loadingEmpty ? '<b class="sk-n sk"></b>' : '<b>' + listOf(b.k).length + '</b>') + b.n + '</button>').join('') +
@@ -394,7 +410,7 @@ function renderBoard() {
       ? '<div class="zero">' + IC.inbox + '<b>目前沒有進行中的案子</b><span>在完整內容按「要做」之後，進度會出現在這一籃。</span></div>'
       : '<div class="zero">' + IC.inbox + '<b>這一籃目前是空的</b><span>' + TBD.laneEmpty + '</span></div>';
     const body = loadingEmpty ? skel() + skel() + skel() : list.length ? list.map(b.k === 'active' ? acard : card).join('') : zero;
-    return '<section class="lane b-' + b.k + (S.tab === b.k ? ' cur' : '') + '" data-l="' + b.k + '"><div class="lh"><h2><i class="ld"></i>' + b.n + (loadingEmpty ? '' : '<em>' + list.length + '</em>') + '</h2>' + scanBox(b.k) + '<p class="lh-d">' + b.d + '</p></div><div class="lbody">' + body + '</div></section>';
+    return '<section class="lane b-' + b.k + (S.tab === b.k ? ' cur' : '') + '" data-l="' + b.k + '"><div class="lh"><h2><i class="ld"></i>' + b.n + (loadingEmpty ? '' : '<em>' + list.length + '</em>') + '</h2>' + scanBox(b.k) + (b.k === 'active' && (mineN || S.mine) ? '<div class="mine-row"><button class="mine-tog" data-act="mine-tog" type="button" aria-pressed="' + !!S.mine + '">' + (S.mine ? '看全部進行中' : '只看我的待辦（' + mineN + '）') + '</button></div>' : '') + '<p class="lh-d">' + b.d + '</p></div><div class="lbody">' + body + '</div></section>';
   }).join('');
   lanes.querySelectorAll('.lane').forEach(l => { const b = l.querySelector('.lbody'); if (keep[l.dataset.l]) b.scrollTop = keep[l.dataset.l]; });
   lanes.scrollLeft = left;
@@ -489,9 +505,119 @@ function structBox(it, clampQual) {
   return rows.length ? '<ul class="facts">' + rows.join('') + '</ul>' : '';
 }
 
+// ---------- 領標（v8；sql/29、31）：只記錄誰申請、誰付了，付款一律自己在採購網完成 ----------
+const NTD = n => n == null ? '' : 'NT$' + Number(n).toLocaleString('en-US');
+const VERDICT = { go: ['建議投', 'v-go'], no: ['不投', 'v-no'], maybe: ['再看', 'v-maybe'] };
+const verdictOf = it => { const v = it.bidSummary && it.bidSummary.advice && it.bidSummary.advice.verdict; return VERDICT[v] || (it.bidSummary ? VERDICT.maybe : null); };
+const bidOk = it => it.lane === 'tender' && ['new', 'snoozed', 'doing'].includes(it.status) &&
+  (it.status !== 'doing' || it.bidState !== 'none' || (it.progressSteps || []).some(s => s.key === PAY_STEP && s.status !== 'done' && s.status !== 'skipped'));
+const bidFetching = it => it.bidState === 'paid' && !!it.bidFetchStartedAt && !(it.bidFetchFailedAt && it.bidFetchFailedAt > it.bidFetchStartedAt);
+function bidLine(it) {   // 卡片正面一行灰色小字（沒申請就不畫）
+  if (!bidOk(it) || it.bidState === 'none') return '';
+  const v = verdictOf(it);
+  const t = it.bidState === 'requested' ? '領標中：' + it.bidRequestedBy + ' 申請'
+    : it.bidState === 'paid' ? (bidFetching(it) ? '肉咖抓檔中' : '已付：' + it.bidPaidBy + (it.bidPaidAt ? ' ' + fmtDay(it.bidPaidAt).replace(/（.）/, '') : '') + (it.bidPaidAmount != null ? ' ' + NTD(it.bidPaidAmount) : ''))
+    : '已領標' + (v ? '・' + v[0] : '，重點在卡片內');
+  return '<p class="bid-line">' + esc(t) + '</p>';
+}
+const bidPayLink = it => linkOf(it, 'pay') || (it.sourceUrl ? { kind: 'other', label: '開公告頁', url: it.sourceUrl, fallback: true } : null);
+function sumVal(v) {   // bid_summary 的值：字串照原文換行；陣列條列；物件攤成「鍵：值」
+  if (v == null || v === '' || (Array.isArray(v) && !v.length)) return '';
+  if (Array.isArray(v)) return '<ul class="bs-list">' + v.map(x => '<li class="sbp">' + softBreak(typeof x === 'object' && x ? Object.entries(x).map(([a, b]) => a + '：' + b).join('；') : String(x)) + '</li>').join('') + '</ul>';
+  if (typeof v === 'object') return '<ul class="bs-list">' + Object.entries(v).map(([a, b]) => '<li class="sbp">' + softBreak(a + '：' + (typeof b === 'object' ? JSON.stringify(b) : String(b))) + '</li>').join('') + '</ul>';
+  return '<p class="sbp">' + softBreak(String(v)) + '</p>';
+}
+const SUM_KEYS = [['eligibility', '資格'], ['scoring', '評分方式'], ['budget', '預算'], ['deadline', '截止與時程'], ['presentation', '簡報'], ['bond_schedule', '押標金與期程'], ['open_questions', '還要問的']];
+function bidSummaryHTML(it) {
+  const s = it.bidSummary; if (!s) return '';
+  const v = verdictOf(it), rs = s.advice && s.advice.reasons, open = S.bidSumOpen.has(it.id);
+  const rest = SUM_KEYS.map(([k, t]) => { const h = sumVal(s[k]); return h ? '<div class="bs-sec' + (k === 'open_questions' ? ' q' : '') + '"><b>' + t + '</b>' + h + '</div>' : ''; }).join('');
+  return '<div class="bs">' + (v ? '<span class="verdict ' + v[1] + '">' + v[0] + '</span>' : '') + (rs ? sumVal(rs) : '') +
+    (rest ? '<button class="bs-more" type="button" data-act="bid-sum" data-id="' + esc(it.id) + '" aria-expanded="' + open + '">' + (open ? '收起重點' : '看領標文件的重點') + '</button>' + (open ? '<div class="bs-rest">' + rest + '</div>' : '') : '') + '</div>';
+}
+function bidBox(it) {
+  if (!bidOk(it)) return '';
+  const id = esc(it.id), st = it.bidState, lines = [];
+  if (st === 'none') lines.push(can('pay') ? '還沒有人領標。' : '還沒有人領標。要領標請找有付款權限的同事。');
+  if (it.bidRequestedBy && st !== 'none') lines.push(esc(it.bidRequestedBy) + (it.bidRequestedAt ? ' ' + fmtDay(it.bidRequestedAt).replace(/（.）/, '') : '') + ' 申請領標');
+  if (st === 'paid' || st === 'fetched') lines.push(it.bidPaidBy ? '已付：' + esc(it.bidPaidBy) + (it.bidPaidAt ? ' ' + fmtDay(it.bidPaidAt).replace(/（.）/, '') : '') + (it.bidPaidAmount != null ? ' ' + NTD(it.bidPaidAmount) : '') + (it.bidHasReceipt ? '（有憑據序號）' : '') + (it.bidPaidNote ? '，' + esc(it.bidPaidNote) : '') : '免費領標');
+  if (st === 'paid') lines.push(bidFetching(it) ? '<span class="spin" aria-hidden="true"></span>肉咖抓檔中，' + esc(relTime(it.bidFetchStartedAt, tnow())) + '開始' : it.bidFetchFailedAt ? '上次抓檔沒成功（' + fmtDate(it.bidFetchFailedAt) + '），肉咖會再試' : '等肉咖抓文件');
+  if (st === 'fetched') lines.push('已領標：' + esc(it.bidFetchedBy || '肉咖') + (it.bidFetchedAt ? ' ' + fmtDay(it.bidFetchedAt).replace(/（.）/, '') : '') + ' 抓到文件' + (it.bidFetchNote ? '（' + esc(it.bidFetchNote) + '）' : ''));
+  const btn = can('pay') && (st === 'none' || st === 'requested')
+    ? '<button class="btn btn-ghost bid-go" type="button" data-act="bid-open" data-id="' + id + '">' + (st === 'none' ? '我要領標' : '打開領標頁') + '</button>' : '';
+  return '<section class="dt-sec bid-box"><h3>領標</h3>' + lines.map(x => '<p class="bid-st">' + x + '</p>').join('') + bidSummaryHTML(it) + btn + '</section>';
+}
+// 領標彈出頁（Borry「彈出他們自己的領票頁面，讓他們自己登錄領標…你要把頁面處理好給他們包含我」）
+const BID_STEPS = ['在這頁按「前往採購網領標」，會開採購網登入頁。', '選「廠商」登入：帳號、密碼、驗證碼都自己輸入。好咖的帳號是「好咖文創股份有限公司」。',
+  '登入後會直接進這一案的「電子領標」。沒有的話，回卡片開原始連結，在公告頁最下面按「電子領標」。', '第 1 步「領標說明」：按「下一步」，跳出提醒就按「確認」。',
+  '第 2 步「領標付費」：先看總計多少錢。', '還沒有人付過：選「是，進行付費流程」，按「下一步」。', '已經有人付過：選「否，已付費」，輸入憑據序號就好，不要再付一次。',
+  '總計 0 元：免費領標，不用付錢，直接下一步。', '選付款方式：點數卡（信用卡或 ATM）、隨身碼（月帳單）或 HiNet 寬頻帳號（電信帳單），照畫面付款。',
+  '第 3 步「取得領標憑據」：記下憑據序號（一長串數字），能截圖就截圖。', '第 5 步「招標文件下載」：手機能按「全部下載」就下載；下載不了也沒關係，貼了序號肉咖會幫忙抓。',
+  '回這頁按「我付好了」，把憑據序號貼上。'];
+const BID_NOTES = ['一張憑據只能給一家公司投標用。', '登入放太久會被登出。付款前如果發現被登出了，先重新登入。', '採購網是電腦版網頁，手機上字會很小，可以放大或把手機轉橫。', '憑據也會寄到採購網帳號登記的信箱。'];
+const factOf = (it, re) => { const f = it.facts.find(x => re.test(x)); return f ? f.replace(/^[^：]{1,10}：/, '') : ''; };
+function bidPage(it) {
+  if (S.bidPage !== it.id) return '';
+  const id = esc(it.id), st = it.bidState, pl = bidPayLink(it), f = S.bidForm;
+  const info = [['案名', esc(it.title)], ['機關', esc(it.org || '沒寫')], ['截止', it.deadline ? esc(it.deadlineText || fmtDate(it.deadline)) : '沒寫'],
+    ['領標費', esc(factOf(it, /^(領標費|文件費|領標)/) || '公告沒寫，進採購網第 2 步看總計')], ['電子領標', esc(factOf(it, /^(電子領標|現場領標)/) || '公告沒寫')]];
+  const done = st === 'paid' || st === 'fetched';
+  const form = done ? '<p class="bp-done">已經有人付過了：' + esc(it.bidPaidBy || '') + (it.bidPaidAmount != null ? ' ' + NTD(it.bidPaidAmount) : '') + '。不要再付一次。</p>'
+    : '<div class="bp-form"><h4>我付好了</h4>' +
+      '<label class="dlg-l" for="bid-amt">金額（選填）</label><div class="bp-amt"><span>NT$</span><input id="bid-amt" class="dlg-in" type="text" inputmode="numeric" autocomplete="off" maxlength="9" value="' + esc(f.amount) + '" placeholder="例如 20"></div>' +
+      '<label class="dlg-l" for="bid-rc">憑據序號（選填，填了 Mac 可以免費重新下載）</label><input id="bid-rc" class="dlg-in" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="64" value="' + esc(f.receipt) + '">' +
+      '<label class="dlg-l" for="bid-note">備註（選填）</label><input id="bid-note" class="dlg-in" type="text" maxlength="200" value="' + esc(f.note) + '" placeholder="例如：用公司卡">' +
+      '<button class="btn btn-primary bp-paid" type="button" data-act="bid-paid" data-id="' + id + '"' + (f.busy ? ' disabled' : '') + '>' + (f.busy ? '送出中…' : '我付好了，送出紀錄') + '</button>' +
+      '<p class="bp-note">這裡只是記錄。付款要自己按上面的「前往採購網領標」，在採購網上完成。</p></div>';
+  return '<div class="cs-scrim" data-act="bid-close" aria-hidden="true"></div><div class="csheet bsheet" role="dialog" aria-modal="true" aria-label="領標">' +
+    '<div class="cs-h"><b>領標</b><span class="cs-t">' + esc(nm(it)) + '</span><button class="dock-close" data-act="bid-close" type="button">關閉</button></div><div class="bp-body">' +
+    '<dl class="bp-info">' + info.map(r => '<dt>' + r[0] + '</dt><dd>' + r[1] + '</dd>').join('') + '</dl>' +
+    (pl ? '<a class="btn btn-primary bp-go" href="' + esc(pl.url) + '" target="_blank" rel="noopener noreferrer" data-act="bid-ext" data-id="' + id + '">' + (pl.fallback ? '開公告頁（還沒有領標入口）' : '前往採購網領標') + '</a>' : '<p class="bp-note">這張卡沒有採購網連結，請到原始公告領標。</p>') +
+    '<ol class="bp-steps">' + BID_STEPS.map(x => '<li>' + esc(x) + '</li>').join('') + '</ol>' +
+    '<details class="bp-notes"><summary>要注意</summary><ul>' + BID_NOTES.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul></details>' + form + '</div></div>';
+}
+// 後端錯誤代碼 → 中文（sql/29）
+function bidErr(e) {
+  const m = String(e && e.message || '');
+  const T = [[/^already_paid/, '這張已經有人付過了（畫面會重抓，看是誰付的）'], [/^already_fetched/, '這張已經抓過文件了'], [/^not_tender/, '只有政府標案可以領標'],
+    [/^bad_card_status/, '這張卡已經刪掉或過期，不能領標'], [/^bad_amount/, '金額要在 0～10,000,000 之間'], [/^note_too_long/, '備註最多 200 字'], [/^receipt_too_long/, '憑據序號最多 64 字'],
+    [/cannot pay/, '你的金鑰沒有領標付款的權限'], [/not found/i, '這張卡不見了，重新整理一次']];
+  const hit = T.find(([re]) => re.test(m)); return hit ? hit[1] : reason(e);
+}
+async function bidOpen(id) {
+  const it = get(id); if (!it) return;
+  S.bidPage = id; S.bidForm = { amount: '', receipt: '', note: '' }; renderDrawer();
+  if (it.bidState === 'none') {   // 按「我要領標」的同時記下是誰申請的（sql/29 opp_request_bid）
+    try { const c = await api.requestBid(id); if (c) put(c); renderAll(); }
+    catch (e) { if (e instanceof AdapterError && e.kind === 'perm') loadWho(); if (/^already_(paid|fetched)/.test(e.message || '')) refreshCard(id); toast(bidErr(e), { bad: true }); }
+  }
+}
+async function bidPaid(id) {
+  const f = S.bidForm; if (!f || f.busy) return;
+  const amt = String(f.amount || '').replace(/[,\s，NT$]/gi, '');
+  if (amt && !/^\d+(\.\d{1,2})?$/.test(amt)) { toast('金額只能填數字', { bad: true }); return; }
+  const amount = amt ? Number(amt) : null, receipt = String(f.receipt || '').trim(), note = String(f.note || '').trim();
+  f.busy = true; renderDrawer();
+  try {
+    const c = await api.markPaid(id, amount, note, receipt);
+    f.receipt = '';   // 序號不留在畫面上：送出就清掉
+    if (c) put(c);
+    S.bidPage = null; S.bidForm = { amount: '', receipt: '', note: '' };
+    toast('已記下：' + ((S.who && S.who.role) ? nickOf(S.who.role) : '你') + ' 付了領標費' + (amount != null ? ' ' + NTD(amount) : '') + '，肉咖會去抓文件');
+    renderAll(); ensureEvents(id, true);
+  } catch (e) {
+    f.busy = false; f.receipt = '';   // 失敗也清掉序號，要再貼一次
+    if (e instanceof AdapterError && e.kind === 'perm') loadWho();
+    if (e instanceof AdapterError && e.kind === 'auth') setAuth();
+    if (/^already_(paid|fetched)/.test(e.message || '')) { S.bidPage = null; refreshCard(id); }
+    toast(bidErr(e), { bad: true }); renderAll();
+  }
+}
+async function refreshCard(id) { try { const c = await api.get(id); if (c) put(c); renderAll(); } catch (e) {} }
+const nickOf = n => n;
 function previewHTML(it) {
   const rem = it.status === 'snoozed' ? it.snoozeUntil : null;
-  return '<div class="dt">' + head(it) + statBlock(it) + structBox(it, true) +
+  return '<div class="dt">' + head(it) + statBlock(it) + structBox(it, true) + bidBox(it) +
     (it.why ? '<p class="dt-why sbp">' + softBreak(it.why) + '</p>' : '') +
     (it.quick.length ? '<ul class="pv-list">' + it.quick.map(x => '<li class="sbp">' + softBreak(x) + '</li>').join('') + '</ul>' : '') +
     warnBox(it.warn, 1) + firstBox(it) +
@@ -546,7 +672,7 @@ function factsBox(it) {
 function fullHTML(it) {
   return '<div class="dt">' + head(it) + statBlock(it) +
     (it.why || it.fit ? '<div>' + (it.why ? '<p class="dt-why sbp">' + softBreak(it.why) + '</p>' : '') + (it.fit ? '<p class="dt-fit">契合度 <b>' + esc(it.fit) + '</b></p>' : '') + '</div>' : '') +
-    structBox(it, false) + warnBox(it.warn) + crawlHTML(it) + firstBox(it) + factsBox(it) +
+    bidBox(it) + structBox(it, false) + warnBox(it.warn) + crawlHTML(it) + firstBox(it) + factsBox(it) +
     '<section class="dt-sec dt-src"><h3>來源</h3>' + metaLine(it) + link(it) + '</section>' + '</div>';
 }
 
@@ -556,7 +682,7 @@ const stepOpen = new Set();   // 展開中的步驟：卡片 id + '|' + 步驟 k
 const ST_TXT = { done: '完成', skipped: '略過', current: '進行中', blocked: '卡住', pending: '還沒開始' };
 const signOf = s => s.sign || ((String(s.note || '').match(/需簽章[：:]\s*([^。\n]+)/) || [])[1] || '').trim();
 const isSealStep = s => /seal|sign/i.test(s.key) || /用印|簽章|簽名/.test(s.name);
-function stepMeta(s) {
+function stepMeta(s, it) {
   const late = s.dueAt && s.dueAt < tnow() && s.status !== 'done' && s.status !== 'skipped';
   const due = s.dueAt ? '<span class="' + (late ? 'due-late' : '') + '">' + (late ? '已逾期 ' : '') + fmtDay(s.dueAt) + ' 前</span>' : '';
   const parts = [];
@@ -566,6 +692,7 @@ function stepMeta(s) {
   if (s.status === 'done') parts.push(s.doneAt ? (tnow() - s.doneAt < 24 * H ? relTime(s.doneAt, tnow()) : fmtDay(s.doneAt).replace(/（.）/, '') + ' 完成') : '完成');
   else if (s.status === 'skipped') parts.push('略過');
   else if (due) parts.push(due);
+  if (it && stepOpenNow(s) && ownerIsMe(s)) parts.unshift('<b class="st-mine">等你確認</b>');
   return parts.join(' · ');
 }
 function stepRow(s, i, all, it) {
@@ -576,7 +703,7 @@ function stepRow(s, i, all, it) {
   const ok = it && it.id ? it.id + '|' + s.key : '', open = ok && stepOpen.has(ok);
   // 付款那步的按鈕一直露在外面（不用點開就能去付款）
   const btn = u && s.key === PAY_STEP && big ? '<div class="step-acts">' + linkBtn(s.key, u, 'btn-primary') + '</div>' : '';
-  const meta = stepMeta(s);
+  const meta = stepMeta(s, it);
   return '<li class="step ' + s.status + (open ? ' open' : '') + '">' +
     '<button class="step-h" data-act="step-tog" data-id="' + esc(it && it.id || '') + '" data-k="' + esc(s.key) + '" type="button" aria-expanded="' + !!open + '">' +
     '<span class="dot-s" aria-hidden="true">' + mark + '</span><span class="step-m"><span class="nm">' + esc(s.name) + '</span>' + (meta ? '<span class="sub">' + meta + '</span>' : '') + '</span>' +
@@ -595,7 +722,28 @@ function stepDetail(s, it) {
   const dl = '<dl class="sd-kv">' + rows.map(r => '<dt>' + r[0] + '</dt><dd>' + r[1] + '</dd>').join('') + '</dl>';
   const note = txt ? '<p class="sd-note sbp">' + softBreak(txt) + '</p>' : '';
   const links = urls.length ? '<div class="sd-links">' + urls.map(x => linkBtn(s.key, x, 'btn-ghost')).join('') + '</div>' : '';
-  return '<div class="step-d">' + note + dl + links + stepHist(s, it) + '</div>';
+  return '<div class="step-d">' + note + dl + links + stepFiles(s, it) + stepBtns(s, it) + stepHist(s, it) + '</div>';
+}
+// 步驟附檔（sql/34：links 裡 step_key 等於這一步的）：開啟、下載、分享，每次都記 opp_track
+const stepLinks = (it, key) => linksOf(it).filter(l => l.stepKey && l.stepKey === key);
+const dlUrl = u => { const m = String(u).match(/^https:\/\/drive\.google\.com\/file\/d\/([\w-]+)/); return m ? 'https://drive.google.com/uc?export=download&id=' + m[1] : u; };   // Drive 檔案直接下載；其他照原網址開
+function stepFiles(s, it) {
+  const ls = stepLinks(it, s.key); if (!ls.length) return '';
+  const id = esc(it.id), k = esc(s.key);
+  return '<div class="sd-files"><p class="sd-h">這一步的文件</p>' + ls.map(l => {
+    const lb = esc(linkText(l)), u = esc(l.url);
+    return '<div class="sf-row"><span class="sf-n">' + lb + '</span><span class="sf-a">' +
+      '<a class="sf-b" href="' + u + '" target="_blank" rel="noopener noreferrer" data-act="file-open" data-id="' + id + '" data-k="' + k + '" data-label="' + lb + '">開啟</a>' +
+      '<a class="sf-b" href="' + esc(dlUrl(l.url)) + '" target="_blank" rel="noopener noreferrer" download data-act="file-dl" data-id="' + id + '" data-k="' + k + '" data-label="' + lb + '">下載</a>' +
+      '<button class="sf-b" type="button" data-act="file-share" data-id="' + id + '" data-k="' + k + '" data-label="' + lb + '" data-url="' + u + '">分享</button></span></div>';
+  }).join('') + '</div>';
+}
+// 步驟按鈕（sql/32）：負責人、admin、planner 才看得到；完成的步驟只有「退回未完成」
+function stepBtns(s, it) {
+  if (!canMarkStep(s, it)) return '';
+  const id = esc(it.id), k = esc(s.key), b = (st, t, cls) => '<button class="sd-btn' + (cls ? ' ' + cls : '') + '" type="button" data-act="step-mark" data-id="' + id + '" data-k="' + k + '" data-st="' + st + '">' + t + '</button>';
+  const done = s.status === 'done' || s.status === 'skipped';
+  return '<div class="sd-acts">' + (done ? b('undone', '退回未完成') : (s.status === 'current' ? '' : b('current', '進行中')) + b('done', '完成', 'pri')) + '</div>';
 }
 // 狀態紀錄：opp_events 裡 detail.step 等於這一步的（後端記了才有）；沒有就只寫完成時間與最後更新
 function stepHist(s, it) {
@@ -603,6 +751,10 @@ function stepHist(s, it) {
   (ev && ev.list || []).filter(e => /^step:/.test(e.action) && e.detail && (e.detail.step_key || e.detail.step) === s.key).forEach(e => {   // sql/32：action step:<status>，detail {step_key, step_name, from, note, as}
     const to = e.action.slice(5), f = ST_TXT[e.detail.from] || '', t = to === 'undone' ? '退回未完成' : ST_TXT[to] || ST_TXT[e.detail.to] || '';
     lines.push('<li><span>' + (e.at ? fmtDate(e.at) : '') + '</span><b>' + esc(e.actor || '不明') + '</b>' + (t ? (f ? esc(f) + ' → ' : '改成 ') + esc(t) : esc(e.action)) + (e.detail.note ? '（' + esc(String(e.detail.note)) + '）' : '') + '</li>');
+  });
+  const TRK = { 'track:open_file': '開啟了', 'track:download_file': '下載了', 'track:share_file': '分享了' };
+  (ev && ev.list || []).filter(e => TRK[e.action] && e.detail && e.detail.step_key === s.key).slice(0, 3).forEach(e => {
+    lines.push('<li class="trk"><span>' + (e.at ? fmtDate(e.at) : '') + '</span><b>' + esc(e.actor || '不明') + '</b>' + TRK[e.action] + ' ' + esc(String(e.detail.label || '文件')) + '</li>');
   });
   if (!lines.length && s.status === 'current' && it && it.progressUpdatedAt) lines.push('<li><span>' + fmtDate(it.progressUpdatedAt) + '</span><b>' + esc(it.progressUpdatedBy || '不明') + '</b>更新進度</li>');
   const busy = ev ? '' : '<p class="sd-empty">讀取紀錄中…</p>';
@@ -631,7 +783,8 @@ function folderRow(it) {
 }
 // 「檔案」區：links 每項一顆按鈕（文字用 label，沒有就用預設），pay 用主色
 function filesRow(it) {
-  const ls = linksOf(it); if (!ls.length) return '';
+  const keys = new Set((it.progressSteps || []).map(s => s.key));
+  const ls = linksOf(it).filter(l => !(l.stepKey && keys.has(l.stepKey))); if (!ls.length) return '';
   return '<div class="fold-row files"><p class="prog-upd">檔案</p><div class="fold-acts">' + ls.map(l => extLink(l, 'btn ' + (l.kind === 'pay' ? 'btn-primary' : 'btn-ghost') + ' file-link')).join('') + '</div></div>';
 }
 function progressBox(it) {
@@ -669,7 +822,8 @@ function progressHTML(it) {
     : '';
   return '<div class="dt">' + head(it, '<span class="pst ' + p.cls + '">' + p.badge + '</span>') +
     '<p class="dt-line">' + esc(amtText(it)) + (dl ? ' · ' + dl : '') + left + '</p>' +
-    progressBox(it) + structBox(it, false) +
+    (it.decidedBy ? '<p class="dt-meta">' + esc(it.decidedBy) + (it.decidedAt ? ' ' + fmtDay(it.decidedAt).replace(/（.）/, '') : '') + ' 按了要做</p>' : '') +
+    bidBox(it) + progressBox(it) + structBox(it, false) +
     (it.why ? '<p class="dt-why sbp">' + softBreak(it.why) + '</p>' : '') + warnBox(it.warn) + crawlHTML(it) + factsBox(it) +
     '<section class="dt-sec dt-src"><h3>來源</h3>' + metaLine(it) + link(it) + '</section>' + '</div>';
 }
@@ -712,7 +866,7 @@ function renderDrawer() {
         '<button class="btn btn-primary" data-act="dive" data-id="' + id + '" type="button">深入了解</button></div>'
       : '<div class="df"><button class="btn btn-primary" data-act="dive" data-id="' + id + '" type="button">深入了解</button></div>';
   }
-  dr.innerHTML = '<div class="dh"><span>' + label + '</span><button class="xb" data-act="close-drawer" type="button" aria-label="關閉">×</button></div><div class="db">' + body + '</div>' + chatDock(it.id) + foot;
+  dr.innerHTML = '<div class="dh"><span>' + label + '</span><button class="xb" data-act="close-drawer" type="button" aria-label="關閉">×</button></div><div class="db">' + body + '</div>' + chatDock(it.id) + foot + bidPage(it);
   dr.setAttribute('aria-label', label);
   dr.dataset.key = it.id + view;
   dr.querySelector('.db').scrollTop = sc;
@@ -744,7 +898,7 @@ function syncOverlay() {
 function openDrawer(id, view) {
   const it = get(id); if (!it) return;
   if (!S.drawer) lastFocus = document.activeElement;
-  S.drawer = { id, view: view || 'preview' }; footMore.open = false;
+  S.drawer = { id, view: view || 'preview' }; footMore.open = false; S.bidPage = null;
   if (it.status === 'doing') { ensureProgress(id); loadItemFu(id); ensureEvents(id, true); }
   else if (view === 'full') ensureDetail(id);
   ensureMsgs(id);   // 每個卡片抽屜都有對話列（v7）
@@ -752,7 +906,7 @@ function openDrawer(id, view) {
   const dr = $('#drawer'); if (!dr.contains(document.activeElement)) dr.querySelector('.xb')?.focus({ preventScroll: true });
 }
 function closeDrawer(silent) {
-  S.drawer = null; footMore.open = false; $('#drawer').classList.remove('show'); syncOverlay();
+  S.drawer = null; footMore.open = false; S.bidPage = null; S.bidForm = { amount: '', receipt: '', note: '' }; $('#drawer').classList.remove('show'); syncOverlay();
   if (!silent) restoreFocus();
 }
 function openSheet() { if (!S.sheet) lastFocus = document.activeElement; S.sheet = true; renderSheet(); syncOverlay(); $('#sheet .xb')?.focus({ preventScroll: true }); }
@@ -983,6 +1137,59 @@ function chatDock(key) {
     (canDelMsg() && n ? '<button class="cs-clear" data-act="msg-clear" data-key="' + k + '" type="button">清空這張卡的對話</button>' : '') +
     '<div class="dock-th">' + list + '</div>' + input + '</div>';
 }
+// 步驟按鈕（sql/32）
+const STEP_ERR = [[/not_step_owner/, '這一步不是你負責的，只有負責人或管理員可以按'], [/bid_managed/, '這一步照領標狀態由系統自動處理'], [/note_too_long/, '備註最多 200 字'],
+  [/no_step/, '這一步不見了，重新整理一次'], [/bad_status/, '狀態不對，重新整理一次'], [/not found/i, '這張卡不見了，重新整理一次']];
+async function doStepMark() {
+  const d = S.dlg; if (!d || d.busy) return;
+  d.busy = true; renderDlg();
+  try {
+    const c = await api.stepMark(d.id, d.k, d.st, String(d.note || '').trim());
+    if (c) put(c);
+    S.dlg = null; renderDlg();
+    toast({ done: '已標成完成', current: '已標成進行中', undone: '已退回未完成' }[d.st] || '已更新');
+    renderAll(); ensureEvents(d.id, true);
+  } catch (e) {
+    S.dlg = null; renderDlg();
+    if (e instanceof AdapterError && e.kind === 'auth') setAuth();
+    if (e instanceof AdapterError && e.kind === 'perm') loadWho();
+    const hit = STEP_ERR.find(([re]) => re.test(e.message || ''));
+    toast((hit ? hit[1] : reason(e)), { bad: true }); ensureProgress(d.id, true);
+  }
+}
+// 分享（手機叫出系統分享，可以傳 LINE、AirDrop、存到檔案）；不支援就複製連結
+async function shareFile(id, k, label, url) {
+  track(id, 'share_file', k, label);
+  if (navigator.share) { try { await navigator.share({ title: label || '文件', url }); return; } catch (e) { if (e && e.name === 'AbortError') return; } }
+  copyText(url, '已複製連結，可以貼到 LINE 或其他地方');
+}
+function copyText(t, okMsg) {
+  const ok = () => toast(okMsg || '已複製'), no = () => toast('這個瀏覽器不讓複製，請長按連結自己複製', { bad: true });
+  const fb = () => { try { const a = document.createElement('textarea'); a.value = t; a.setAttribute('readonly', ''); a.style.position = 'fixed'; a.style.opacity = '0'; document.body.appendChild(a); a.select(); const r = document.execCommand('copy'); a.remove(); r ? ok() : no(); } catch (e) { no(); } };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(t).then(ok, fb); else fb();
+}
+// 誰接進來了（sql/35，只有 admin）：頂列「肉咖」抽屜最上面一小節
+async function loadPresence() {
+  if (!can('admin') || !api || !api.presence || S.presOff) return;
+  try { S.presence = await api.presence(); }
+  catch (e) { if (/Could not find the function|PGRST202/i.test(e.message || '') || (e instanceof AdapterError && e.kind === 'perm')) S.presOff = true; else if (!S.presence) S.presence = 'err'; }
+  if (S.drawer && S.drawer.view === 'chat') renderDrawer();
+}
+function presText(p) {
+  if (p.status === 'today') return '✅ 今天 ' + (p.lastSeenAt ? hm(p.lastSeenAt) + ' ' : '') + '開過';
+  if (p.status === 'recent') return '✅ ' + (p.statusText || (p.lastSeenAt ? Math.max(1, Math.floor((tnow() - p.lastSeenAt) / D)) + ' 天前開過' : '最近開過'));
+  if (p.status === 'stale') return '😴 ' + (p.lastSeenAt ? Math.floor((tnow() - p.lastSeenAt) / D) + ' 天沒開' : '很久沒開');
+  return '⏳ 還沒打開';
+}
+function presHTML() {
+  if (!can('admin') || S.presOff || !S.presence) return '';
+  if (S.presence === 'err') return '<section class="dt-sec pres"><h3>誰接進來了</h3><p class="sd-empty">讀不到，等一下再打開一次。</p></section>';
+  return '<section class="dt-sec pres"><h3>誰接進來了</h3><ul class="pres-l">' + S.presence.map(p => {
+    const o = S.presOpen.has(p.name), n = esc(p.name);
+    return '<li><button class="pres-r" type="button" data-act="pres-tog" data-n="' + n + '" aria-expanded="' + o + '"><b>' + n + '</b><span class="pres-' + (p.status === 'recent' ? 'today' : p.status) + '">' + esc(presText(p)) + '</span></button>' +
+      (o ? '<p class="pres-d">第一次打開：' + (p.firstSeenAt ? fmtDate(p.firstSeenAt) : '還沒') + '<br>最後一次打開：' + (p.lastSeenAt ? fmtDate(p.lastSeenAt) : '還沒') + (p.seenCount ? '（共 ' + p.seenCount + ' 次）' : '') + '<br>最後一次動作：' + (p.lastActionAt ? fmtDate(p.lastActionAt) : '還沒有') + '</p>' : '') + '</li>';
+  }).join('') + '</ul></section>';
+}
 // 刪對話（sql/33，只有 admin）：後端沒有這兩支函式時（PGRST202）整個藏起來
 const canDelMsg = () => can('admin') && !!api && !!api.msgDelete && !S.msgDelOff;
 async function doMsgDel() {
@@ -1042,7 +1249,7 @@ function chatHTML(key) {
 function openChat() {
   if (!S.drawer) lastFocus = document.activeElement;
   S.drawer = { id: '__chat', view: 'chat' };
-  ensureMsgs('');
+  ensureMsgs(''); loadPresence();
   renderDrawer(); syncOverlay();
   ($('#chat-input') || $('#drawer .xb'))?.focus({ preventScroll: true });
 }
@@ -1059,7 +1266,7 @@ function renderChatDrawer(dr) {
       const it = get(m.itemId), u = unread[m.itemId] || 0, body = m.body.length > 40 ? m.body.slice(0, 40) + '…' : m.body;
       return '<button class="cc-row' + (u ? ' new' : '') + '" data-act="chat-card" data-id="' + esc(m.itemId) + '" type="button"><span class="cc-h"><b>' + esc(it ? nm(it) : (m.itemShortTitle || '已不在看板的案子')) + '</b>' +
         (u ? '<i class="cc-n">' + u + ' 則新回覆</i>' : '') + '<span class="cc-t">' + relTime(m.createdAt, tnow()) + '</span></span><span class="cc-b">' + esc(m.author || '不明') + '：' + esc(body) + '</span></button>'; }).join('') + '</div></section>' : '';
-  dr.innerHTML = '<div class="dh"><span>跟肉咖說</span><button class="xb" data-act="close-drawer" type="button" aria-label="關閉">×</button></div><div class="db"><div class="dt">' + oth + chatHTML('') + '</div></div>' +
+  dr.innerHTML = '<div class="dh"><span>跟肉咖說</span><button class="xb" data-act="close-drawer" type="button" aria-label="關閉">×</button></div><div class="db"><div class="dt">' + presHTML() + oth + chatHTML('') + '</div></div>' +
     '<div class="df"><button class="btn btn-ghost" data-act="close-drawer" type="button">回到面板</button></div>';
   dr.setAttribute('aria-label', '跟肉咖說');
   dr.dataset.key = '__chat';
@@ -1069,8 +1276,9 @@ function renderChatDrawer(dr) {
   markSeen('');
 }
 // 重畫抽屜時保留輸入框的焦點與游標（草稿內容存在 S.draft）
-function chatFocus() { const a = document.activeElement; return a && a.id === 'chat-input' ? [a.selectionStart, a.selectionEnd] : null; }
-function chatRestore(k) { if (!k) return; const t = $('#chat-input'); if (t) { t.focus({ preventScroll: true }); try { t.setSelectionRange(k[0], k[1]); } catch (e) {} } }
+const KEEP_IDS = ['chat-input', 'bid-amt', 'bid-rc', 'bid-note'];
+function chatFocus() { const a = document.activeElement; return a && KEEP_IDS.includes(a.id) ? [a.selectionStart, a.selectionEnd, a.id] : null; }
+function chatRestore(k) { if (!k) return; const t = document.getElementById(k[2] || 'chat-input'); if (t) { t.focus({ preventScroll: true }); try { t.setSelectionRange(k[0], k[1]); } catch (e) {} } }
 async function msgSend(key) {
   const text = (S.draft.get(key) || '').trim();
   if (!text) { $('#chat-input')?.focus(); return; }
@@ -1096,6 +1304,9 @@ async function msgSend(key) {
   }
 }
 document.addEventListener('input', e => {
+  const bf = { 'bid-amt': 'amount', 'bid-rc': 'receipt', 'bid-note': 'note' }[e.target.id];
+  if (bf) { S.bidForm[bf] = e.target.value; return; }
+  if (e.target.id === 'step-note' && S.dlg) { S.dlg.note = e.target.value; return; }
   if (e.target.id !== 'chat-input') return;
   S.draft.set(e.target.dataset.key || '', e.target.value);
   const c = $('#chat-cnt'); if (c) c.textContent = e.target.value.length + '／' + MSG_MAX;
@@ -1216,6 +1427,12 @@ function renderDlg() {
     html = '<h2 id="dlg-t">' + (done ? '標成完成' : '取消這件事') + '</h2><p class="dlg-p">「' + esc(it.title) + '」' + (it.owner ? '（' + esc(it.owner) + '）' : '') + '</p>' +
       '<label class="dlg-l" for="fu-note">' + (done ? '完成的依據' : '取消的原因') + '（選填）</label><input id="fu-note" class="dlg-in" type="text" maxlength="500" placeholder="' + (done ? '例如：群組 11/16 Louis 說已回' : '例如：改外景，不用了') + '" value="' + esc(d.note) + '">' +
       '<div class="dlg-acts"><button class="btn btn-ghost" data-act="dlg-close" type="button">返回</button><button class="btn btn-primary" data-act="fu-confirm" type="button">' + (done ? '標成完成' : '確定取消') + '</button></div>';
+  } else if (d.type === 'stepmark') {
+    const s = (it.progressSteps || []).find(x => x.key === d.k), sn = esc(s ? s.name : d.k);
+    const w = { done: '標成完成', current: '標成進行中', undone: '退回未完成' }[d.st] || '更新';
+    html = '<h2 id="dlg-t">' + (d.st === 'undone' ? '把「' + sn + '」退回未完成？' : '把「' + sn + '」' + w + '？') + '</h2><p class="dlg-p">「' + name + '」。按下去會記下是你按的，大家都看得到。</p>' +
+      '<label class="dlg-l" for="step-note">備註（選填，最多 200 字）</label><input id="step-note" class="dlg-in" type="text" maxlength="200" value="' + esc(d.note || '') + '" placeholder="例如：石頭已用印、寄出">' +
+      '<div class="dlg-acts"><button class="btn btn-ghost" data-act="dlg-close" type="button">取消</button><button class="btn btn-primary" data-act="step-mark-confirm" type="button"' + (d.busy ? ' disabled' : '') + '>' + w + '</button></div>';
   } else if (d.type === 'msgdel' || d.type === 'msgclear') {
     const all = d.type === 'msgclear';
     html = '<h2 id="dlg-t" class="danger">' + (all ? '清空這張卡的對話' : '刪掉這則訊息') + '</h2><p class="dlg-p">' + (all ? '「' + name + '」底下的對話會全部刪掉（包含肉咖的回覆和付款、步驟通知），無法復原。卡片、進度和付款紀錄不會動。' : '這則訊息和底下的回覆會一起刪掉，無法復原。') + '</p>' +
@@ -1227,7 +1444,7 @@ function renderDlg() {
       '<div class="dlg-acts"><button class="btn btn-ghost" data-act="dlg-close" type="button">取消</button><button class="btn btn-danger" data-act="purge-confirm" type="button"' + (ok ? '' : ' disabled') + '>徹底刪除</button></div>';
   }
   box.innerHTML = html; wrap.hidden = false;
-  const f = (keepFocus && document.getElementById(keepFocus)) || box.querySelector('#fu-note, #purge-in, input[name=arch-kind]:checked, input[name=arch-kind], .btn-primary');
+  const f = (keepFocus && document.getElementById(keepFocus)) || box.querySelector('#fu-note, #step-note, #purge-in, input[name=arch-kind]:checked, input[name=arch-kind], .btn-primary');
   f && f.focus({ preventScroll: true });
 }
 document.addEventListener('input', e => {
@@ -1598,6 +1815,7 @@ async function refresh() {
     if (dr && viewOf() === 'full' && dr.crawlStatus === 'done' && !dr.detailText) ensureDetail(dr.id);
     // 正開著進度抽屜，而進度有更新（progress_updated_at 變了）：重抓步驟清單
     if (dr && viewOf() === 'progress') { ensureProgress(dr.id); if ([...stepOpen].some(k => k.startsWith(dr.id + '|'))) ensureEvents(dr.id, true); }
+    if (S.who && can('act')) items().filter(i => laneOf(i) === 'active' && i.progressStatus !== 'done').forEach(i => ensureProgress(i.id));   // v8：等你確認要看步驟負責人
     loadMsgs();   // 跟肉咖說：不綁案子的對話（頂列紅點）＋正開著的那張卡
     loadScan();   // 立即掃描：三籃狀態
     loadFu();     // 追蹤事項：頂列數字、開著的抽屜、開著的進度（新增和更新都會發同一個 changed）
@@ -1690,9 +1908,21 @@ document.addEventListener('click', e => {
       case 'msg-clear': S.dlg = { type: 'msgclear', id: act.dataset.key || '' }; renderDlg(); break;
       case 'msg-del-confirm': doMsgDel(); break;
       case 'open-arch': openArchive(); break;
+      case 'bid-open': bidOpen(id); break;
+      case 'bid-close': S.bidPage = null; S.bidForm = { amount: '', receipt: '', note: '' }; renderDrawer(); $('#drawer .bid-go')?.focus({ preventScroll: true }); break;
+      case 'bid-paid': bidPaid(id); break;
+      case 'bid-ext': break;   // 外部連結：照瀏覽器預設開新分頁（主畫面 App 會跳到 Safari／Chrome）
+      case 'bid-sum': S.bidSumOpen.has(id) ? S.bidSumOpen.delete(id) : S.bidSumOpen.add(id); renderDrawer(); break;
+      case 'mine-tog': S.mine = !S.mine; renderBoard(); break;
+      case 'step-mark': S.dlg = { type: 'stepmark', id, k: act.dataset.k, st: act.dataset.st, note: '' }; renderDlg(); break;
+      case 'step-mark-confirm': doStepMark(); break;
+      case 'file-open': track(id, 'open_file', act.dataset.k, act.dataset.label); break;
+      case 'file-dl': track(id, 'download_file', act.dataset.k, act.dataset.label); break;
+      case 'file-share': shareFile(id, act.dataset.k, act.dataset.label, act.dataset.url); break;
+      case 'pres-tog': { const n = act.dataset.n || ''; S.presOpen.has(n) ? S.presOpen.delete(n) : S.presOpen.add(n); renderDrawer(); break; }
       case 'open-hot': { const h = get(id); if (h) openDrawer(id, laneOf(h) === 'active' ? 'progress' : 'preview'); break; }
       case 'dock-toggle': { const k = act.dataset.key || ''; if (dockShow.has(k)) closeDock(k); else { dockShow.add(k); renderDrawer(); dockScroll($('#drawer')); markSeen(k); const t = $('#chat-input'); t && t.focus({ preventScroll: true }); } break; }
-      case 'step-tog': { const k = id + '|' + (act.dataset.k || ''); stepOpen.has(k) ? stepOpen.delete(k) : stepOpen.add(k); if (stepOpen.has(k)) ensureEvents(id); renderDrawer(); $('#drawer [data-act=step-tog][data-k="' + CSS.escape(act.dataset.k || '') + '"]')?.focus({ preventScroll: true }); break; }
+      case 'step-tog': { const k = id + '|' + (act.dataset.k || ''); stepOpen.has(k) ? stepOpen.delete(k) : stepOpen.add(k); if (stepOpen.has(k)) { ensureEvents(id); if (get(id)) track(id, 'open_step', act.dataset.k); } renderDrawer(); $('#drawer [data-act=step-tog][data-k="' + CSS.escape(act.dataset.k || '') + '"]')?.focus({ preventScroll: true }); break; }
       case 'foot-more': footMore.open = !footMore.open; renderDrawer(); if (footMore.open) $('#drawer .fmenu .fm-i')?.focus({ preventScroll: true }); break;
       case 'dock-more': { const k = act.dataset.key || ''; if (dockOpen.has(k)) dockOpen.delete(k); else dockOpen.add(k); renderDrawer(); break; }
       case 'chat-card': { const it = get(id); if (!it) toast('這張卡已經不在看板上，可以到封存區找'); else { dockShow.add(id); openDrawer(id, it.status === 'doing' ? 'progress' : 'preview'); } break; }
@@ -1714,7 +1944,7 @@ document.addEventListener('click', e => {
   }
 });
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { const dk = S.drawer && S.drawer.id; if (S.dlg) closeDlg(); else if (dk && dockShow.has(dk) && !['chat', 'archive', 'followups'].includes(S.drawer.view)) closeDock(dk); else if (S.drawer && footMore.open) { footMore.open = false; renderDrawer(); } else if (S.drawer) closeDrawer(); else if (S.sheet) closeSheet(); return; }
+  if (e.key === 'Escape') { const dk = S.drawer && S.drawer.id; if (S.dlg) closeDlg(); else if (S.bidPage) { S.bidPage = null; renderDrawer(); } else if (dk && dockShow.has(dk) && !['chat', 'archive', 'followups'].includes(S.drawer.view)) closeDock(dk); else if (S.drawer && footMore.open) { footMore.open = false; renderDrawer(); } else if (S.drawer) closeDrawer(); else if (S.sheet) closeSheet(); return; }
   if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('card')) { const it = get(e.target.dataset.id); if (it) openDrawer(it.id, it.status === 'doing' ? 'progress' : 'preview'); }
   if (e.key === 'Tab' && (S.dlg || S.drawer || S.sheet)) {         // 焦點只在最上層的疊層內打轉
     const box = S.dlg ? $('#dlg') : S.drawer ? $('#drawer') : $('#sheet');
@@ -1768,7 +1998,27 @@ function pasteKey() {
   const k = tokenFrom(v) || String(v || '').trim();
   if (k.length >= 20) { saveKey(k); location.reload(); } else if (v) toast('這不像金鑰，請貼完整網址', { bad: true });
 }
+function startUpdates() {   // 自動換新版：說明卡頁面也要（不然沒金鑰的人永遠停在舊版）
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
+    navigator.serviceWorker.ready.then(reg => { if (reg.active) reg.active.postMessage({ keep: APP_V }); }).catch(() => {});
+  }
+  checkVersion();
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkVersion(); });
+  window.addEventListener('focus', () => checkVersion());
+  setInterval(() => checkVersion(), 10 * 60e3);
+}
+function renderNoKey() {
+  ['#fubtn', '#archbtn', '#rkbtn', '#holdbtn', '#hpill', '#hot'].forEach(s => { const b = $(s); if (b) b.hidden = true; });
+  $('#tabs').hidden = true; $('#lanes').hidden = true; $('#notice').hidden = true; $('#sum').innerHTML = '';
+  $('#live').innerHTML = '<span class="dot off"></span><span>還沒有金鑰</span>';
+  let msg = $('#boardmsg'); if (!msg) { msg = document.createElement('div'); msg.id = 'boardmsg'; msg.className = 'board-msg'; $('#board').appendChild(msg); }
+  msg.hidden = false;
+  msg.innerHTML = IC.warn + '<h2>需要你的專屬網址</h2><p>請用大器私訊給你的專屬網址打開，或從手機主畫面的『好咖皮條客』打開。在 LINE 裡點開的話，請按右下角用 Safari 或 Chrome 開啟。</p>' +
+    '<button class="btn btn-ghost" data-act="paste-key" type="button">貼上金鑰</button>';
+}
 (async function boot() {
+  if (!hasKey() && !new URLSearchParams(location.search).has('mock')) { renderNoKey(); startUpdates(); return; }   // 不讀快照、不輪詢
   api = await createAdapter();
   loadSnapshot();                        // 先用快照立刻畫出來，不等網路
   S.net = 'loading'; renderAll();
@@ -1779,12 +2029,14 @@ function pasteKey() {
   schedulePoll();
   setInterval(tick, 30000);
   setInterval(() => { if (document.querySelector('[data-elapsed]')) tick(); }, 1000);
-  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
-    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
-    navigator.serviceWorker.ready.then(reg => { if (reg.active) reg.active.postMessage({ keep: APP_V }); }).catch(() => {});   // 讓 SW 清掉舊版的快取檔
-  }
-  checkVersion();
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkVersion(); });
-  window.addEventListener('focus', () => checkVersion());
-  setInterval(() => checkVersion(), 10 * 60e3);
+  startUpdates();
+})();
+// 浮動的「跟肉咖說」：往下捲時先讓開，停下來或往上捲再出現（D 複審 v72：不要一直蓋住列表右側）
+(() => { let last = 0, t = 0;
+  document.addEventListener('scroll', e => {
+    const db = e.target; if (!db.classList || !db.classList.contains('db')) return;
+    const w = db.parentElement && db.parentElement.querySelector('.fab-wrap'); if (!w) return;
+    const y = db.scrollTop; if (y > last + 4) w.classList.add('fab-away'); else if (y < last - 4) w.classList.remove('fab-away');
+    last = y; clearTimeout(t); t = setTimeout(() => w.classList.remove('fab-away'), 900);
+  }, true);
 })();

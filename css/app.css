@@ -792,6 +792,60 @@ p,li{text-wrap:pretty}
 .lh .scan{flex-wrap:nowrap}
 .lh .scan .scan-st{flex:1 1 0}
 
+/* ===== v8 ===== */
+.bid-line{margin-top:4px;font-size:12.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bid-box{display:grid;gap:4px}
+.bid-st{font-size:14px;color:var(--mut);line-height:1.6;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.bid-st .spin{width:14px;height:14px;border-width:2.5px}
+.bid-go{justify-self:start;min-height:40px;padding:0 16px;font-size:15px;margin-top:4px}
+.bs{display:grid;gap:6px;margin-top:4px}
+.verdict{justify-self:start;display:inline-flex;align-items:center;height:30px;padding:0 14px;border-radius:999px;font-weight:800;font-size:15px}
+.v-go{background:#e2f4ea;color:#14633b}.v-no{background:var(--stat);color:var(--mut)}.v-maybe{background:#fff3d6;color:#7a4b00}
+.bs-list{margin:0;padding-left:20px;font-size:14px;line-height:1.6}
+.bs-more{justify-self:start;min-height:36px;padding:0;border:0;background:none;font:inherit;font-size:13.5px;font-weight:700;color:var(--ink);text-decoration:underline}
+.bs-rest{display:grid;gap:8px}
+.bs-sec b{display:block;font-size:13px;color:var(--mut)}
+.bs-sec p{font-size:14px;line-height:1.6}
+.bs-sec.q li{color:#7a4b00}
+.bsheet{max-height:92%}
+.bp-body{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;display:grid;gap:12px;align-content:start;padding-bottom:4px}
+.bp-info{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;font-size:14px;line-height:1.5}
+.bp-info dt{color:var(--mut);font-weight:700}.bp-info dd{margin:0;overflow-wrap:anywhere}
+.bp-go{min-height:52px;font-size:17px;text-decoration:none}
+.bp-steps{margin:0;padding-left:22px;display:grid;gap:6px;font-size:14.5px;line-height:1.6}
+.bp-notes{font-size:13.5px;color:var(--mut)}.bp-notes summary{min-height:36px;display:flex;align-items:center;font-weight:700;cursor:pointer}
+.bp-notes ul{margin:0;padding-left:20px;line-height:1.6}
+.bp-form{display:grid;gap:6px;padding:12px;border-radius:14px;background:var(--card);border:1.5px solid var(--line)}
+.bp-form h4{font-size:15px;font-weight:800}
+.bp-amt{display:flex;align-items:center;gap:6px}.bp-amt span{font-weight:700;color:var(--mut)}.bp-amt .dlg-in{flex:1}
+.bp-paid{margin-top:6px}
+.bp-note{font-size:12.5px;color:var(--mut);line-height:1.5}
+.bp-done{font-size:14.5px;font-weight:700;padding:10px 12px;border-radius:12px;background:var(--stat)}
+.mine-badge{display:inline-flex;align-items:center;height:24px;padding:0 9px;border-radius:999px;background:#ffe9a8;color:#4d3400;font-size:12.5px;font-weight:800;white-space:nowrap}
+.step .sub .st-mine{color:#7a4b00}
+.mine-row{display:flex;justify-content:flex-end;margin-top:2px}
+.mine-tog{min-height:32px;padding:0 2px;border:0;background:none;font:inherit;font-size:12.5px;font-weight:700;color:var(--ink);text-decoration:underline}
+.sd-files{display:grid;gap:4px}
+.sf-row{display:flex;align-items:center;gap:8px;min-width:0;padding:4px 0;border-top:1px solid var(--line)}
+.sf-row:first-of-type{border-top:0}
+.sf-n{flex:1 1 auto;min-width:0;font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sf-a{flex:none;display:flex;gap:4px}
+.sf-b{min-height:36px;min-width:44px;padding:0 8px;display:inline-flex;align-items:center;justify-content:center;border-radius:10px;border:1.5px solid var(--line);background:var(--card);font:inherit;font-size:13px;font-weight:700;color:var(--ink);text-decoration:none}
+.sd-acts{display:flex;gap:8px;flex-wrap:wrap}
+.sd-btn{min-height:40px;padding:0 16px;border-radius:12px;border:1.5px solid var(--line);background:var(--card);font:inherit;font-size:14.5px;font-weight:800;color:var(--ink)}
+.sd-btn.pri{background:#e2f4ea;border-color:#9fd3b5;color:#14633b}
+.sd-hist li.trk{color:var(--mut)}
+.pres-l{list-style:none;margin:0;padding:0;display:grid}
+.pres-r{display:flex;align-items:center;gap:10px;width:100%;min-height:40px;padding:0;border:0;border-top:1px solid var(--line);background:none;font:inherit;font-size:13.5px;text-align:left;color:var(--mut)}
+.pres-l li:first-child .pres-r{border-top:0}
+.pres-r b{min-width:4.5em;color:var(--ink)}
+.pres-d{font-size:12.5px;color:var(--mut);line-height:1.6;padding:0 0 8px 0}
+.pres-stale{color:#7a4b00}.pres-never{color:var(--mut)}
+.fab-wrap .rk-fab{transition:opacity .2s,transform .2s}
+.fab-wrap.fab-away .rk-fab{opacity:0;transform:translateY(10px);pointer-events:none}
+.bp-steps{list-style:decimal}.bp-steps li::marker{color:var(--mut);font-weight:700}
+.bs-list{list-style:disc}
+
 /* ===== v74 急修：手機頁首三列、急件小字獨立一列、待決區縮成圓形 ===== */
 .top h1{white-space:nowrap;flex:none}
 .live{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

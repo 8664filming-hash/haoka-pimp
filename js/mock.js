@@ -32,7 +32,7 @@
 //   realbuild    要做之後照真卡流程：排隊 → 建立中 → 建好（看 3 秒快輪詢與第 1 步自動完成）
 //   folderslow   同 realbuild，但 12 秒後才建好
 //   live         9 秒後進來一張新卡（看新進光暈與 toast）
-import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq, normalizeArchived, normalizeFollowups, normalizeFollowup, normalizeEvents } from './adapter.js?v75';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
+import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq, normalizeArchived, normalizeFollowups, normalizeFollowup, normalizeEvents } from './adapter.js?v80';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
 
 const H = 3600e3, D = 24 * H, MIN = 60e3;
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -107,7 +107,8 @@ function build() {
       deadline: at(2, 17), created_at: ago(30), expire_at: at(2, 17), case_no: '1150807-A（示意）', tender_method: '公開招標', bid_bond: '不用', performance_period: '決標後 120 日',
       qualification: '公司登記，營業項目含一般廣告服務業；近三年有政府影片標案實績者佳。投標文件只收紙本，截止前送達機關總務室。',
       fit: '中', why: '不用押標金，上一次流標後重新招標，競爭可能比較少', quick: ['要公司登記，營業項目含一般廣告服務業', '影片支數與長度要看招標文件'],
-      facts: ['案號：1150807-A（示意）', '押標金：不用', '流標：上一次流標、重新招標', '收件：只收紙本'], warn: ['送件只收紙本，要預留用印和寄送的時間。'],
+      facts: ['案號：1150807-A（示意）', '押標金：不用', '流標：上一次流標、重新招標', '收件：只收紙本', '領標費：機關文件費 0 元＋系統使用費 20 元＝總計 20 元（示意）', '電子領標：提供電子領標，不提供現場領標'],
+      links: [{ kind: 'pay', label: '去領標', url: 'https://web.pcc.gov.tw/tps/sso/init/supp/DEMO' }], warn: ['送件只收紙本，要預留用印和寄送的時間。'],
       first_step: '電子領標，拿到需求規範書與評審須知。', source_site: '政府電子採購網', source_url: SRC + 'tender-1' }),
     row({ id: 'demo-t2', lane: 'tender', title: '臺灣故事館形象影片', org: '文化部影視及流行音樂產業局', amount_label: '預算', amount_display: '240萬', amount_num: 2400000,
       deadline: at(12, 17), created_at: ago(20), expire_at: at(12, 17), case_no: 'BAMID-115-021（示意）', tender_method: '最有利標', bid_bond: '12萬', performance_period: '決標後 180 日',
@@ -140,7 +141,7 @@ function build() {
     // 卡住
     doing({ id: 'demo-a2', title: '產業故事影音案', org: '臺北市產業發展局', amount_label: '預算', amount_display: '98萬', deadline: at(3, 12), created_at: ago(120),
       tender_method: '公開招標', source_site: '政府電子採購網', source_url: SRC + 'active-2', folder_name: '11-10_產業故事影音案', folder_path: '/Users/Shared/公司工作區/11-10_產業故事影音案',
-      progress_state: 'blocked', progress_blocker: '等公司用印', progress_note: '企劃書與估價單都好了，只差用印。', progress_updated_at: ago(5), progress_updated_by: '企劃流程' }, 'tender', 5, { cur: 'blocked', note: '等公司用印', owner: '行政' }),
+      progress_state: 'blocked', progress_blocker: '等公司用印', progress_note: '企劃書與估價單都好了，只差用印。', progress_updated_at: ago(5), progress_updated_by: '企劃流程' }, 'tender', 5, { cur: 'blocked', note: '等公司用印', owner: 'CC' }),
     // 這步逾期（當前步驟的內部期限過了）
     doing({ id: 'demo-a3', title: '地方文化影像徵件', org: '某文化基金會', amount_label: '補助上限', amount_display: '60萬', deadline: at(10, 17), created_at: ago(200),
       source_url: SRC + 'active-3', source_site: '基金會官網', folder_name: '11-05_地方文化影像徵件', folder_path: '/Users/Shared/公司工作區/11-05_地方文化影像徵件',
@@ -204,9 +205,26 @@ function build() {
     st('pitch_prep', '評選簡報準備', 'current', { due_at: qflag.includes('sentnodue') ? null : iso(now + 2 * D + 2 * H), owner: 'AI', note: '簡報稿與分鏡要先給內審。標案說明寫「本案鼓勵運用 AI 工具」，這句是公告原文，不換字。內審資料夾：https://drive.google.com/drive/folders/demo-pitch' }),
     st('pitch_present', '評選簡報', 'pending'), st('await_opening', '等待開標', 'pending'), st('result', '決標或結案', 'pending'),
   ];
+  sent.links = (sent.links || []).concat([
+    { kind: 'other', label: '用印清單', url: 'https://drive.google.com/file/d/demo-seal-list/view', step_key: 'seal_submit' },
+    { kind: 'other', label: '標單（含附件三同意書）', url: 'https://drive.google.com/file/d/demo-bid-form/view', step_key: 'seal_submit' },
+    { kind: 'other', label: '簡報稿', url: 'https://docs.google.com/presentation/d/demo-pitch/edit', step_key: 'pitch_prep' },
+  ]);
   if (qflag.includes('longname')) { sent.short_title = '台江人物故事影像紀錄計畫第二期（待 Louis 審 v2.6 並回覆決策卡 B1–B4）'; sent.title = sent.short_title; }   // v74：重現真資料的長案名
   rows.push(sent);
   if (qflag.includes('nohold')) for (let i = rows.length - 1; i >= 0; i--) if (rows[i].status === 'stashed') rows.splice(i, 1);
+  // 領標四種狀態（?mock=bidrequested／bidpaid／bidfetching／bidfetched 套在 demo-t2；預設 demo-t1 是 none）
+  const t2 = rows.find(r => r.id === 'demo-t2');
+  if (t2 && qflag.includes('bid')) {
+    Object.assign(t2, { bid_state: 'requested', bid_requested_by: 'CC', bid_requested_at: ago(3), links: [{ kind: 'pay', label: '去領標', url: 'https://web.pcc.gov.tw/tps/sso/init/supp/DEMO2' }],
+      facts: (t2.facts || []).concat(['領標費：總計 0 元（免費領標）', '電子領標：提供電子領標']) });
+    if (/bid(paid|fetching|fetched)/.test(qflag)) Object.assign(t2, { bid_state: 'paid', bid_paid_by: 'CC', bid_paid_at: ago(2), bid_paid_amount: 200, bid_paid_note: '用公司卡', bid_has_receipt: true });
+    if (/bidfetching/.test(qflag)) t2.bid_fetch_started_at = iso(now - 6 * 60e3);
+    if (/bidfetched/.test(qflag)) Object.assign(t2, { bid_state: 'fetched', bid_fetched_by: 'mac-studio-3', bid_fetched_at: ago(1), bid_fetch_note: '文件 12 個',
+      bid_summary: { advice: { verdict: 'go', reasons: ['預算 240 萬，跟我們做過的形象片規模相當', '評選看企劃 40%，我們有優勢'] },
+        eligibility: '依法登記之影視相關公司，近三年有一件以上同類實績。', scoring: ['企劃 40%', '團隊 30%', '價格 30%'], budget: '240 萬（含稅）',
+        deadline: '11/28 17:00 截止收件；12/3 評選', presentation: '簡報 15 分鐘、詢答 10 分鐘', bond_schedule: null, open_questions: ['簡報要不要附樣片？', '成品交件格式（4K？）'] } });
+  }
   // ---------- 封存區示意：已結案的卡（sql/25：仍是 doing，progress_state=done、progress_outcome＝結果，結案 14 天後撤下看板） ----------
   const arch = (o, kind, daysAgo, note) => { const t = now - daysAgo * D;
     const r = Object.assign(doing(o, o.lane || 'tender', 7, {}), { progress_state: 'done', progress_outcome: kind, progress_archive_at: iso(t + 14 * D), progress_note: note || null, progress_updated_at: iso(t), progress_updated_by: 'operator' });
@@ -307,7 +325,8 @@ export function mockAdapter(modeStr) {
   let nextN = 0;
   // ---------- 跟肉咖說：示意對話（opp_msg_* 的欄位格式） ----------
   const tAgo = m => iso(Date.now() - m * 60e3);
-  const me = () => viewer ? '示範唯讀' : flags.has('admin') ? '示範管理員' : '示範操作';
+  const me = () => viewer ? '示範唯讀' : flags.has('cc') ? 'CC' : flags.has('admin') ? '示範管理員' : '示範操作';
+  const evs = [];   // 領標、步驟按鈕、點擊紀錄（新到舊排序在 events 裡做）
   let msgs = flags.has('empty') ? [] : [
     { id: 'm1', item_id: null, author: '同事 A', body: '這週可以先幫忙整理各案的截止日嗎？', reply_to: null, status: 'done', handled_by: RK, created_at: tAgo(180) },
     { id: 'm2', item_id: null, author: RK, body: '好，各案截止日已經整理好，最近的是內政部那案，2 天後。（示意）', reply_to: 'm1', status: 'done', handled_by: RK, created_at: tAgo(150) },
@@ -363,10 +382,11 @@ export function mockAdapter(modeStr) {
       await wait(80);
       if (flags.has('auth')) throw new AdapterError('auth', 'invalid key', 401);
       const demoted = flags.has('demote') && whoN++ > 0;
+      if (flags.has('cc')) return { role: 'CC', kind: 'operator', aliases: ['CC', '行政'], caps: { read: true, act: true, add: false, edit: false, fulltext: false, remind: false, progress: false, notion: false, mac: false, admin: false, pay: true } };   // ?mock=cc：負責用印那步的同事，有領標付款權限
       if (demoted) return { role: '示範降權', kind: 'viewer', caps: { read: true, act: false, add: false, edit: false, fulltext: false, remind: false, progress: false, notion: false, mac: false, admin: false } };
       return viewer
         ? { role: '示範唯讀', kind: 'viewer', caps: { read: true, act: false, add: false, edit: false, fulltext: false, remind: false, progress: false, notion: false, mac: false, admin: false } }
-        : { role: flags.has('admin') ? '示範管理員' : '示範操作', kind: flags.has('admin') ? 'admin' : 'operator', caps: Object.assign({ read: true, act: true, add: false, edit: false, fulltext: false, remind: false, progress: false, notion: false, mac: false, admin: flags.has('admin') }, flags.has('buildtender') ? { build_tender: true } : {}, flags.has('progress') ? { progress: true } : {}) };   // ?mock=progress：有 can_progress 的 operator（追蹤事項可寫）   // ?mock=buildtender：有 build_tender 的 operator（sql/28）
+        : { role: flags.has('admin') ? '示範管理員' : '示範操作', kind: flags.has('admin') ? 'admin' : 'operator', aliases: [flags.has('admin') ? '示範管理員' : '示範操作'], caps: Object.assign({ pay: flags.has('admin') || flags.has('pay') }, { read: true, act: true, add: false, edit: false, fulltext: false, remind: false, progress: false, notion: false, mac: false, admin: flags.has('admin') }, flags.has('buildtender') ? { build_tender: true } : {}, flags.has('progress') ? { progress: true } : {}) };   // ?mock=progress：有 can_progress 的 operator（追蹤事項可寫）   // ?mock=buildtender：有 build_tender 的 operator（sql/28）
     },
     async list() {
       if (flags.has('hang')) await new Promise(() => {});
@@ -543,14 +563,15 @@ export function mockAdapter(modeStr) {
       if (flags.has('offline')) throw new AdapterError('network', '連不上伺服器');
       if (flags.has('evfail')) throw new AdapterError('server', '伺服器沒有回應');
       const t = Date.now(), h = 3600e3, at = x => iso(t - x * h);
-      const ev = id !== 'demo-a10' ? [{ at: at(30), item_id: id, actor: 'Company Claude', action: 'added', detail: {} }] : [
+      const ev = evs.filter(e => e.item_id === id).sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).concat(id !== 'demo-a10' ? [{ at: at(30), item_id: id, actor: 'Company Claude', action: 'added', detail: {} }] : [
+        { at: at(2), item_id: id, actor: 'CC', action: 'track:download_file', detail: { step_key: 'seal_submit', label: '標單' } },
         { at: at(3), item_id: id, actor: 'AI', action: 'step:current', detail: { step_key: 'pitch_prep', step_name: '評選簡報準備', from: 'pending', note: null, as: 'planner' } },
         { at: at(20), item_id: id, actor: '企劃流程', action: 'step:done', detail: { step_key: 'qualify', step_name: '資格審查', from: 'current', note: null, as: 'planner' } },
         { at: at(6 * 24), item_id: id, actor: 'CC', action: 'step:done', detail: { step_key: 'seal_submit', step_name: '用印與送件', from: 'current', note: '石頭用印完成、已寄出', as: 'owner' } },
         { at: at(6 * 24 + 20), item_id: id, actor: 'CC', action: 'step:undone', detail: { step_key: 'seal_submit', step_name: '用印與送件', from: 'done', note: '附件三少簽名，退回', as: 'owner' } },
         { at: at(11 * 24), item_id: id, actor: 'mac-studio-3', action: 'folder:done', detail: {} },
         { at: at(11 * 24 + 1), item_id: id, actor: 'Borry', action: 'status:doing', detail: {} },
-      ];
+      ]);
       return normalizeEvents(ev.slice(0, limit || 100));
     },
     async msgList(itemId, limit) {
@@ -558,6 +579,62 @@ export function mockAdapter(modeStr) {
       if (flags.has('offline')) throw new AdapterError('network', '連不上伺服器');
       const l = msgs.filter(m => !itemId || m.item_id === itemId).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));   // 示意：p_id 空時回全部（前端自己分不綁案子的）
       return l.slice(0, limit || 50).map(normalizeMsg);
+    },
+    // ---------- 領標（sql/29）：只記錄，不付款 ----------
+    async requestBid(id) {
+      await wait(250);
+      if (!(flags.has('admin') || flags.has('pay') || flags.has('cc'))) throw new AdapterError('perm', 'this key cannot pay bids', 403);
+      const r = find(id); if (!r) throw new AdapterError('state', 'not found', 404);
+      if (r.lane !== 'tender') throw new AdapterError('state', 'not_tender: only tender cards', 400);
+      if (r.bid_state === 'paid' || r.bid_state === 'fetched') throw new AdapterError('state', 'already_paid: bid is already ' + r.bid_state, 409);
+      if (r.bid_state !== 'requested') { Object.assign(r, { bid_state: 'requested', bid_requested_by: me(), bid_requested_at: iso(Date.now()) }); evs.push({ at: iso(Date.now()), item_id: id, actor: me(), action: 'bid:requested', detail: {} }); ping(); }
+      return normalize(card(r));
+    },
+    async markPaid(id, amount, note, receipt) {
+      await wait(400);
+      if (!(flags.has('admin') || flags.has('pay') || flags.has('cc'))) throw new AdapterError('perm', 'this key cannot pay bids', 403);
+      const r = find(id); if (!r) throw new AdapterError('state', 'not found', 404);
+      if (amount != null && (amount < 0 || amount > 10000000)) throw new AdapterError('state', 'bad_amount: amount must be 0-10000000', 400);
+      if (note && note.length > 200) throw new AdapterError('state', 'note_too_long: note max 200 characters', 400);
+      if (receipt && receipt.length > 64) throw new AdapterError('state', 'receipt_too_long: receipt max 64 characters', 400);
+      if (flags.has('alreadypaid') && r.bid_state !== 'paid') Object.assign(r, { bid_state: 'paid', bid_paid_by: '巴西', bid_paid_at: iso(Date.now() - 60e3), bid_paid_amount: 20 });   // 模擬另一個人剛好先付了
+      if (r.bid_state === 'paid' || r.bid_state === 'fetched') { ping(); throw new AdapterError('state', 'already_paid: bid is already ' + r.bid_state, 409); }
+      Object.assign(r, { bid_state: 'paid', bid_paid_by: me(), bid_paid_at: iso(Date.now()), bid_paid_amount: amount, bid_paid_note: note || null, bid_has_receipt: !!receipt,
+        bid_requested_by: r.bid_requested_by || me(), bid_requested_at: r.bid_requested_at || iso(Date.now()) });
+      evs.push({ at: iso(Date.now()), item_id: id, actor: me(), action: 'paid', detail: { amount, note: note || null, has_receipt: !!receipt } });
+      msgs.push({ id: 'mp' + (++msgN), item_id: id, author: me(), body: me() + ' 已付領標費' + (amount != null ? ' NT$' + amount : '') + '，請領標並把重點整理到卡片' + (receipt ? '（有憑據序號）' : ''), reply_to: null, status: 'new', handled_by: null, created_at: iso(Date.now()) });
+      ping(); return normalize(Object.assign(card(r), { progress_steps: r.progress_steps }));
+    },
+    // ---------- 步驟按鈕（sql/32） ----------
+    async stepMark(id, key, status, note) {
+      await wait(300);
+      const r = find(id); if (!r) throw new AdapterError('state', 'not found', 404);
+      const s = (r.progress_steps || []).find(x => x.key === key); if (!s) throw new AdapterError('state', 'no_step: step not found', 400);
+      const mine = String(s.owner || '').split(/[、，,／\/;；&＋+]/).map(x => x.replace(/\s/g, '').toLowerCase()).some(x => x && [me(), flags.has('cc') ? '行政' : ''].map(y => y.toLowerCase()).includes(x));
+      if (!(flags.has('admin') || flags.has('progress') || mine)) throw new AdapterError('perm', 'not_step_owner: only the step owner, admin or planner can mark this step', 403);
+      if (note && note.length > 200) throw new AdapterError('state', 'note_too_long: note max 200 characters', 400);
+      const was = s.status;
+      if (status === 'done') { s.status = 'done'; s.done_at = iso(Date.now()); const nx = r.progress_steps.find(x => x.status === 'pending'); if ((was === 'current' || was === 'blocked') && nx) nx.status = 'current'; }
+      else if (status === 'current') { r.progress_steps.forEach(x => { if (x !== s && (x.status === 'current' || x.status === 'blocked')) x.status = 'pending'; }); s.status = 'current'; }
+      else if (status === 'undone') { if (was !== 'done' && was !== 'skipped') return normalize(Object.assign(card(r), { progress_steps: r.progress_steps })); r.progress_steps.forEach(x => { if (x !== s && (x.status === 'current' || x.status === 'blocked')) x.status = 'pending'; }); s.status = 'current'; delete s.done_at; }
+      if (note) s.note = note;
+      if (was === 'blocked') { r.progress_state = 'active'; r.progress_blocker = null; }
+      r.progress_updated_at = iso(Date.now()); r.progress_updated_by = me(); derive(r);
+      evs.push({ at: iso(Date.now()), item_id: id, actor: me(), action: 'step:' + status, detail: { step_key: key, step_name: s.name, from: was, note: note || null, as: mine ? 'owner' : 'admin' } });
+      ping(); return normalize(Object.assign(card(r), { progress_steps: r.progress_steps }));
+    },
+    async track(id, action, detail) { await wait(60); evs.push({ at: iso(Date.now()), item_id: id, actor: me(), action: 'track:' + action, detail: detail || {} }); return { recorded: true }; },
+    async presence() {
+      await wait(150);
+      if (!flags.has('admin')) throw new AdapterError('perm', 'only an admin key can see presence', 403);
+      const t = Date.now(), h = 3600e3;
+      return [
+        { name: 'Bosen', kind: 'operator', firstSeenAt: null, lastSeenAt: null, seenCount: 0, lastActionAt: null, status: 'never', statusText: '從沒打開過' },
+        { name: '阿包', kind: 'operator', firstSeenAt: t - 9 * 24 * h, lastSeenAt: t - 5 * 24 * h, seenCount: 3, lastActionAt: t - 5 * 24 * h, status: 'stale', statusText: '5 天沒開' },
+        { name: '石頭', kind: 'operator', firstSeenAt: t - 4 * 24 * h, lastSeenAt: t - 2 * 24 * h, seenCount: 4, lastActionAt: null, status: 'recent', statusText: '2 天前開過' },
+        { name: 'CC', kind: 'operator', firstSeenAt: t - 3 * 24 * h, lastSeenAt: t - 2 * h, seenCount: 12, lastActionAt: t - 2 * h, status: 'today', statusText: '今天開過' },
+        { name: '巴西', kind: 'operator', firstSeenAt: t - 6 * 24 * h, lastSeenAt: t - 40 * 60e3, seenCount: 20, lastActionAt: t - 45 * 60e3, status: 'today', statusText: '今天開過' },
+      ];
     },
     async msgDelete(msgId) {   // sql/33：刪一則連同底下所有回覆
       await wait(250);

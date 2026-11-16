@@ -36,7 +36,9 @@ export const CONFIG = {
          scanRequest: 'opp_scan_request', scanStatus: 'opp_scan_status',   // 立即掃描（C 做）
          archive: 'opp_archive', unarchive: 'opp_unarchive', archiveList: 'opp_archive_list', purge: 'opp_purge',   // 封存區與徹底刪除（sql/25）
          followupList: 'opp_followup_list', followupUpdate: 'opp_followup_update',
-         events: 'opp_events' },   // 卡片紀錄（sql/29，D 做；viewer 以上可讀）   // 追蹤事項（sql/27，C 做）   // 封存區與徹底刪除（sql/25，C 做）
+         events: 'opp_events',
+         requestBid: 'opp_request_bid', markPaid: 'opp_mark_paid',   // 領標（sql/29、31）
+         stepMark: 'opp_step_mark', track: 'opp_track', presence: 'opp_admin_presence' },   // 步驟按鈕（32）、點擊紀錄（34）、誰接進來了（35）   // 卡片紀錄（sql/29，D 做；viewer 以上可讀）   // 追蹤事項（sql/27，C 做）   // 封存區與徹底刪除（sql/25，C 做）
   MSG_LIMIT: 50,
 };
 
@@ -81,7 +83,7 @@ export async function createAdapter() {
   const configured = CONFIG.SUPABASE_URL.startsWith('http') && !CONFIG.SUPABASE_URL.includes('YOUR-PROJECT-REF') && !CONFIG.SUPABASE_ANON_KEY.startsWith('YOUR-');
   if (!configured) console.info('[好咖皮條客] adapter.js 的 SUPABASE_URL / SUPABASE_ANON_KEY 還是待填佔位，目前顯示示範資料');
   if (hasKey() && !forceMock && configured) return liveAdapter();
-  const { mockAdapter } = await import('./mock.js?v75');   // ?v 跟 sw.js 的 CACHE 一起換
+  const { mockAdapter } = await import('./mock.js?v80');   // ?v 跟 sw.js 的 CACHE 一起換
   return mockAdapter(forceMock ? mockFlag : '');
 }
 
@@ -97,7 +99,8 @@ export const LINK_KINDS = ['pool', 'review', 'pay', 'session', 'other'];
 export const ARCHIVE_KINDS = ['won', 'lost', 'submitted', 'withdrawn'];   // 得標／核定、未得標、已送件結案、作廢
 function links(v) {
   if (!Array.isArray(v)) return [];
-  return v.filter(x => x && typeof x === 'object').map(x => ({ kind: LINK_KINDS.includes(x.kind) ? x.kind : 'other', label: str(x.label).trim(), url: /^https:\/\//i.test(str(x.url).trim()) ? str(x.url).trim() : '' })).filter(x => x.url);
+  return v.filter(x => x && typeof x === 'object').map(x => ({ kind: LINK_KINDS.includes(x.kind) ? x.kind : 'other', label: str(x.label).trim(), url: /^https:\/\//i.test(str(x.url).trim()) ? str(x.url).trim() : '',
+    stepKey: /^[a-z0-9_]{1,40}$/.test(str(x.step_key)) ? str(x.step_key) : '' })).filter(x => x.url);   // step_key（sql/34）：掛到那一步；對不到步驟就當整張卡的連結
 }
 const int = v => { const n = Number(v); return Number.isFinite(n) ? Math.round(n) : null; };
 const STEP_ST = ['pending', 'current', 'done', 'skipped', 'blocked'];
@@ -107,7 +110,7 @@ function steps(v) {
   if (!Array.isArray(v)) return null;          // null = 這次回傳沒帶步驟（opp_list），前端要另外去拿
   return v.filter(s => s && typeof s === 'object').map(s => ({
     key: str(s.key), name: rkName(str(s.name) || str(s.key)), status: STEP_ST.includes(s.status) ? s.status : 'pending',
-    dueAt: ts(s.due_at), doneAt: ts(s.done_at), owner: rkName(nick(str(s.owner))), note: rkText(str(s.note)),
+    dueAt: ts(s.due_at), doneAt: ts(s.done_at), owner: rkName(nick(str(s.owner))), ownerRaw: str(s.owner), note: rkText(str(s.note)),   // ownerRaw：比對「我負責的」用（sql/32 照原字比）
     sign: rkText(str(s.sign || s.signers || s.needs_sign || '')),   // 需簽章（C 加；沒有獨立欄位時從備註「需簽章：…」取）
   }));
 }
@@ -156,6 +159,14 @@ export function normalize(r) {
     progressDueAt: ts(r.progress_due_at), progressArchiveAt: ts(r.progress_archive_at),
     progressUpdatedAt: ts(r.progress_updated_at), progressUpdatedBy: rkName(nick(str(r.progress_updated_by))),
     progressSteps: steps(r.progress_steps),
+    // 領標（sql/29、31）：bid_state none｜requested｜paid｜fetched；憑據序號明文永遠不會進卡片，只有 bid_has_receipt
+    bidState: ['none', 'requested', 'paid', 'fetched'].includes(r.bid_state) ? r.bid_state : 'none',
+    bidRequestedBy: nick(str(r.bid_requested_by)), bidRequestedAt: ts(r.bid_requested_at),
+    bidPaidBy: nick(str(r.bid_paid_by)), bidPaidAt: ts(r.bid_paid_at), bidPaidAmount: r.bid_paid_amount == null || r.bid_paid_amount === '' ? null : Number(r.bid_paid_amount), bidPaidNote: str(r.bid_paid_note),
+    bidFetchedBy: nick(str(r.bid_fetched_by)), bidFetchedAt: ts(r.bid_fetched_at), bidFetchNote: rkText(str(r.bid_fetch_note)), bidHasReceipt: !!r.bid_has_receipt,
+    bidFetchStartedAt: ts(r.bid_fetch_started_at), bidFetchFailedAt: ts(r.bid_fetch_failed_at),
+    bidSummary: r.bid_summary && typeof r.bid_summary === 'object' && !Array.isArray(r.bid_summary) ? r.bid_summary : null,
+    decidedBy: nick(str(r.decided_by)),
   };
 }
 
@@ -260,7 +271,7 @@ function liveAdapter() {
     mode: 'live',
     async whoami() {
       const d = await rpc(R.whoami, {});
-      return { role: str(d && d.role), kind: str(d && d.kind), caps: (d && d.caps) || {} };
+      return { role: str(d && d.role), kind: str(d && d.kind), caps: (d && d.caps) || {}, aliases: Array.isArray(d && d.aliases) ? d.aliases.map(str).filter(Boolean) : [] };   // aliases（sql/32）：第一個是金鑰名
     },
     async list() {
       const d = await rpc(R.list, { p_gone_hours: CONFIG.GONE_HOURS });
@@ -280,6 +291,15 @@ function liveAdapter() {
     async archiveList(q, year, limit) { const d = await rpc(R.archiveList, { p_q: q || null, p_year: year || null, p_limit: limit || 100 }); return (Array.isArray(d) ? d : (d && Array.isArray(d.items) ? d.items : [])).filter(x => x && x.id).map(normalizeArchived); },
     // 追蹤事項：讀 viewer 以上；改只有 planner 或 admin（其他回 28000 → 403）
     async followupList(status, itemId, limit) { return normalizeFollowups(await rpc(R.followupList, { p_status: status || 'open', p_item_id: itemId || null, p_limit: limit || 200 })); },
+    // 領標（sql/29）：申請、我付好了（序號只送出、不回傳）
+    async requestBid(id) { return card(await rpc(R.requestBid, { p_id: id })); },
+    async markPaid(id, amount, note, receipt) { return card(await rpc(R.markPaid, { p_id: id, p_amount: amount, p_note: note || null, p_receipt: receipt || null })); },
+    // 步驟按鈕（sql/32）：status current｜done｜undone
+    async stepMark(id, stepKey, status, note) { return card(await rpc(R.stepMark, { p_id: id, p_step_key: stepKey, p_status: status, p_note: note || null })); },
+    // 點擊紀錄（sql/34）：action open_step｜open_file｜share_file｜download_file；detail 只收 step_key、label
+    async track(id, action, detail) { return await rpc(R.track, { p_id: id, p_action: action, p_detail: detail || null }); },
+    // 誰接進來了（sql/35，只有 admin）
+    async presence() { const d = await rpc(R.presence, {}); return (Array.isArray(d) ? d : []).filter(x => x && x.name).map(x => ({ name: str(x.name), kind: str(x.kind), firstSeenAt: ts(x.first_seen_at), lastSeenAt: ts(x.last_seen_at), seenCount: int(x.seen_count) || 0, lastActionAt: ts(x.last_action_at), status: str(x.status), statusText: str(x.status_text) })); },
     async events(id, limit) { return normalizeEvents(await rpc(R.events, { p_id: id, p_limit: limit || 100 })); },
     async followupUpdate(fid, patch) { const d = await rpc(R.followupUpdate, { p_fid: fid, p_patch: patch }); const one = Array.isArray(d) ? d[0] : d; return one && typeof one === 'object' && one.id != null ? normalizeFollowup(one) : null; },
     async purge(id, title) { return await rpc(R.purge, { p_id: id, p_confirm_title: title }); },
