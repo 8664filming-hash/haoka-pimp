@@ -32,7 +32,7 @@
 //   realbuild    要做之後照真卡流程：排隊 → 建立中 → 建好（看 3 秒快輪詢與第 1 步自動完成）
 //   folderslow   同 realbuild，但 12 秒後才建好
 //   live         9 秒後進來一張新卡（看新進光暈與 toast）
-import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq, normalizeArchived, normalizeFollowups, normalizeFollowup } from './adapter.js?v7';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
+import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq, normalizeArchived, normalizeFollowups, normalizeFollowup } from './adapter.js?v71';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
 
 const H = 3600e3, D = 24 * H, MIN = 60e3;
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -331,10 +331,10 @@ export function mockAdapter(modeStr) {
     overdue: f.status === 'open' && !!f.due_at && Date.parse(f.due_at) < Date.now(), duplicate: false });
   // ---------- 立即掃描：三種狀態示意 ----------
   const scanSt = {
-    tender: { lane: 'tender', status: 'done', result: '新增 2 件、重複 5 件（AI 判讀：推薦 4、可視人力加投 1、不推薦 12）（掃描 total=19 new=2 errors=0）', created_at: tAgo(42), done_at: tAgo(40), last_done_at: tAgo(40) },
+    tender: { lane: 'tender', status: 'done', result: '新增 2 件、重複 5 件（肉咖判讀：推薦 4、可視人力加投 1、不推薦 12）（掃描 total=19 new=2 errors=0）', created_at: tAgo(42), done_at: tAgo(40), last_done_at: tAgo(40) },
     grant: { lane: 'grant', status: 'running', phase: 'judging', result: null, created_at: tAgo(1), done_at: null, last_done_at: tAgo(180) },
-    ...(flags.has('nowatch') ? {} : { watch: { lane: 'watch', status: 'done', result: '新增 7 件、重複 0 件（AI 判讀：值得盯 7 件、不盯 1 件；1 張正式公告接上盯案；來源：採購網公開徵求、公開閱覽、無法決標）', created_at: tAgo(30), done_at: tAgo(26), last_done_at: tAgo(26) } }),   // ?mock=nowatch：舊後端沒有 lanes.watch
-    pitch: flags.has('pitchnull') ? { lane: 'pitch', status: null } : { lane: 'pitch', status: 'done', result: '新增 0 件、重複 4 件（AI 判讀：推薦 0、可視人力加投 0、不推薦 9）', created_at: tAgo(6), done_at: tAgo(5), last_done_at: tAgo(5) },
+    ...(flags.has('nowatch') ? {} : { watch: { lane: 'watch', status: 'done', result: '新增 7 件、重複 0 件（肉咖判讀：值得盯 7 件、不盯 1 件；1 張正式公告接上盯案；來源：採購網公開徵求、公開閱覽、無法決標）', created_at: tAgo(30), done_at: tAgo(26), last_done_at: tAgo(26) } }),   // ?mock=nowatch：舊後端沒有 lanes.watch
+    pitch: flags.has('pitchnull') ? { lane: 'pitch', status: null } : { lane: 'pitch', status: 'done', result: '新增 0 件、重複 4 件（肉咖判讀：推薦 0、可視人力加投 0、不推薦 9）', created_at: tAgo(6), done_at: tAgo(5), last_done_at: tAgo(5) },
   };
   // 補助徵件那筆「掃描中」：開頁 9 秒後掃完、新增 1 張卡
   const finishScan = (lane, n) => {
@@ -343,9 +343,10 @@ export function mockAdapter(modeStr) {
       const src = rows.find(r => r.lane === lane && r.status === 'new') || rows.find(r => r.status === 'new');
       if (src) { const c = Object.assign(JSON.parse(JSON.stringify(src)), { id: 'scan-' + lane + '-' + (++nextN), title: '掃描新進：' + ({ tender: '宣傳影片標案', grant: '影像補助', pitch: '品牌合作', watch: '公開徵求（預計 12/7 前後公告）' }[lane]) + '（示意）', short_title: null, created_at: iso(Date.now()), status: 'new', crawl_status: 'none', full_text: '', why: '掃描新進的示意卡。' }); rows.unshift(c); }
     }
-    Object.assign(st, { status: 'done', phase: null, result: '新增 ' + n + ' 件、重複 3 件（AI 判讀：推薦 ' + (n + 2) + '、可視人力加投 1、不推薦 15）（掃描 total=' + (n + 18) + ' new=' + n + ' errors=0）', done_at: iso(Date.now()), last_done_at: iso(Date.now()) }); ping();
+    Object.assign(st, { status: 'done', phase: null, result: '新增 ' + n + ' 件、重複 3 件（肉咖判讀：推薦 ' + (n + 2) + '、可視人力加投 1、不推薦 15）（掃描 total=' + (n + 18) + ' new=' + n + ' errors=0）', done_at: iso(Date.now()), last_done_at: iso(Date.now()) }); ping();
   };
   if (!flags.has('empty')) setTimeout(() => finishScan('grant', 1), 9000);
+  if (flags.has('cardmsgnew')) setTimeout(() => { msgs.push({ id: 'mnew2', item_id: 'demo-a10', author: RK, body: '簡報稿第一版放內審了。（示意）', reply_to: 'm6', status: 'done', handled_by: RK, created_at: iso(Date.now()) }); ping(); }, 3000);   // ?mock=cardmsgnew：恆春卡 3 秒後來一則肉咖新回覆
   if (flags.has('msgnew')) setTimeout(() => { msgs.push({ id: 'mnew', item_id: null, author: RK, body: '補充：截止日表已更新，新增一筆補助。（示意）', reply_to: 'm1', status: 'done', handled_by: RK, created_at: iso(Date.now()) }); ping(); }, 3000);
 
   if (flags.has('live')) setTimeout(() => {
@@ -508,7 +509,7 @@ export function mockAdapter(modeStr) {
       setTimeout(() => { Object.assign(st, { status: 'running', phase: 'scanning' }); ping(); }, 1500);   // 示意把 2～5 分鐘壓成幾秒
       setTimeout(() => { st.phase = 'judging'; ping(); }, 3500);
       setTimeout(() => { st.phase = 'sending'; ping(); }, 5500);
-      if (flags.has('scanfailed')) setTimeout(() => { Object.assign(st, { status: 'failed', phase: null, result: 'AI 判讀逾時（示意）', done_at: iso(Date.now()) }); ping(); }, 6500);
+      if (flags.has('scanfailed')) setTimeout(() => { Object.assign(st, { status: 'failed', phase: null, result: '肉咖判讀逾時（示意）', done_at: iso(Date.now()) }); ping(); }, 6500);
       else setTimeout(() => finishScan(lane, 2), 7000);
       return normalizeScanReq({ state: 'queued', request: req() });
     },

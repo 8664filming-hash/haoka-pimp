@@ -80,7 +80,7 @@ export async function createAdapter() {
   const configured = CONFIG.SUPABASE_URL.startsWith('http') && !CONFIG.SUPABASE_URL.includes('YOUR-PROJECT-REF') && !CONFIG.SUPABASE_ANON_KEY.startsWith('YOUR-');
   if (!configured) console.info('[好咖皮條客] adapter.js 的 SUPABASE_URL / SUPABASE_ANON_KEY 還是待填佔位，目前顯示示範資料');
   if (hasKey() && !forceMock && configured) return liveAdapter();
-  const { mockAdapter } = await import('./mock.js?v7');   // ?v 跟 sw.js 的 CACHE 一起換
+  const { mockAdapter } = await import('./mock.js?v71');   // ?v 跟 sw.js 的 CACHE 一起換
   return mockAdapter(forceMock ? mockFlag : '');
 }
 
@@ -111,6 +111,9 @@ function steps(v) {
 }
 
 const closedRow = r => r.progress_state === 'done' || r.progress_status === 'done';
+// 顯示用：後端文字裡的「AI 判讀／AI 判斷／AI：」一律顯示成「肉咖判讀／肉咖：」（Borry「卡片資料裡面的AI判讀，請多改成肉咖判讀」）。資料本身不改
+export const rkText = v => typeof v === 'string' ? v.replace(/AI\s*判[讀斷]/g, '肉咖判讀').replace(/(^|[\s，。、；（(「])AI\s*[：:]/g, '$1肉咖：') : v;
+const rkArr = a => a.map(rkText);
 export function normalize(r) {
   const status = r.status === 'stashed' ? 'snoozed' : (['new', 'doing', 'dropped', 'expired'].includes(r.status) ? r.status : 'new');
   return {
@@ -121,7 +124,7 @@ export function normalize(r) {
     deadline: ts(r.deadline), deadlineText: str(r.deadline_text), deadlineApprox: !!r.deadline_approx,
     expiresAt: ts(r.expire_at), snoozeUntil: ts(r.remind_at), stashDueAt: ts(r.stash_due_at), decidedAt: ts(r.decided_at),
     sourceUrl: safeUrl(r.source_url), sourceSite: str(r.source_site), foundBy: nick(str(r.found_by)), foundAt: ts(r.created_at), isDemo: !!r.is_demo,
-    why: str(r.why), quick: arr(r.quick), facts: arr(r.facts), warn: arr(r.warn), firstStep: str(r.first_step), fit: str(r.fit),
+    why: rkText(str(r.why)), quick: rkArr(arr(r.quick)), facts: rkArr(arr(r.facts)), warn: rkArr(arr(r.warn)), firstStep: rkText(str(r.first_step)), fit: rkText(str(r.fit)),
     // 標案結構化欄位（公司版新增）。honor（導演地位）公司版不用，前端忽略。
     caseNo: str(r.case_no), tenderMethod: str(r.tender_method), bidBond: str(r.bid_bond), performancePeriod: str(r.performance_period), qualification: str(r.qualification),
     crawlStatus: str(r.crawl_status) || 'none', crawlError: str(r.crawl_error), hasFullText: !!r.has_full_text,
@@ -137,7 +140,7 @@ export function normalize(r) {
     progressStatus: PROG_ST.includes(r.progress_status) ? r.progress_status : (status === 'doing' ? 'active' : 'none'),
     progressState: str(r.progress_state), progressStage: str(r.progress_stage), progressStageKey: str(r.progress_stage_key),
     progressPct: int(r.progress_pct), progressStepN: int(r.progress_step_n), progressStepTotal: int(r.progress_step_total),
-    progressNote: str(r.progress_note), progressBlocker: str(r.progress_blocker), progressOutcome: str(r.progress_outcome),
+    progressNote: rkText(str(r.progress_note)), progressBlocker: str(r.progress_blocker), progressOutcome: str(r.progress_outcome),
     progressDueAt: ts(r.progress_due_at), progressArchiveAt: ts(r.progress_archive_at),
     progressUpdatedAt: ts(r.progress_updated_at), progressUpdatedBy: nick(str(r.progress_updated_by)),
     progressSteps: steps(r.progress_steps),
@@ -172,8 +175,8 @@ export function normalizeScan(x) {
     else if (depth > 0) cur += ch; else main += ch;
   }
   if (depth > 0 && cur) groups.push(cur);
-  main = main.trim();
-  const det = groups.map(g => g.trim()).filter(g => g && !/[A-Za-z_]+\s*=/.test(g)).join('；');
+  main = rkText(main.trim());
+  const det = rkText(groups.map(g => g.trim()).filter(g => g && !/[A-Za-z_]+\s*=/.test(g)).join('；'));
   return { lane: str(x.lane), status: str(x.status), phase: ['scanning', 'judging', 'sending'].includes(x.phase) ? x.phase : '',
     added: scanAdded(main || x.result), resultText: rt, resultMain: main, resultDetail: det,
     createdAt: ts(x.created_at), doneAt: ts(x.done_at), lastDoneAt: ts(x.last_done_at) };

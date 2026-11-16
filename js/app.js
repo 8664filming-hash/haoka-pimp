@@ -1,6 +1,6 @@
 // 好咖皮條客主程式：狀態、畫面、事件。只透過 adapter.js 取得與寫入資料。版面規格見交接包 DESIGN.md。
-import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl, RK, SCAN_LANES } from './adapter.js?v7';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
-import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v7';
+import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl, RK, SCAN_LANES } from './adapter.js?v71';   // ?v 跟 sw.js 的 CACHE 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
+import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v71';
 
 const $ = s => document.querySelector(s);
 const LANES = [
@@ -636,7 +636,7 @@ function renderDrawer() {
   dr.classList.add('show');
   dockScroll(dr);
   chatRestore(keep);
-  markSeen(it.id);   // 對話串在每個卡片抽屜都看得到
+  if (dockShow.has(it.id)) markSeen(it.id);   // 對話展開時才算看過（收起時按鈕上留紅點）
 }
 
 function renderAll() {
@@ -879,9 +879,15 @@ function loadMsgs() {
 }
 const chatOpenFor = key => !!S.drawer && (S.drawer.view === 'chat' ? key === '' : S.drawer.id === key && ['full', 'progress', 'preview', 'archived'].includes(viewOf()));
 // 卡片抽屜的對話列（v7，Borry「卡片點下去應該也能有肉咖對話框啊」）：固定在底欄上方，上面接這張卡最近 3 則，可以展開全部
-const dockOpen = new Set();
+const dockOpen = new Set(), dockShow = new Set();   // dockShow：展開中的卡（v7.1 預設收起，Borry「點開卡片會被肉咖的對話卡一半」）
 function chatDock(key) {
   const th = threadOf(key), n = th ? th.length : 0, open = dockOpen.has(key), k = esc(key), d = S.draft.get(key) || '';
+  if (d.trim()) dockShow.add(key);   // 打到一半的字：保持展開
+  if (!dockShow.has(key)) {
+    const unread = unreadReplies().filter(m => (m.itemId || '') === key).length;
+    return '<div class="dock dock-min" role="region" aria-label="跟肉咖說"><button class="dock-toggle" data-act="dock-toggle" data-key="' + k + '" type="button" aria-expanded="false" aria-label="跟肉咖說，' + n + ' 則' + (unread ? '，有 ' + unread + ' 則新回覆' : '') + '">' +
+      '<span aria-hidden="true">💬</span> 跟肉咖說（' + n + '）' + (unread ? '<i class="rk-dot dock-dot" aria-hidden="true"></i>' : '') + '</button></div>';
+  }
   const shown = th ? (open ? th : th.slice(-3)) : [];
   const list = !th ? '<p class="chat-empty">讀取對話中…</p>' : n ? '<ol class="msgs">' + shown.map(m => msgLi(m, th)).join('') + '</ol>'
     : S.msgs.get(key) && S.msgs.get(key).err ? '<p class="chat-empty">對話讀不到，等一下會自動再試。</p>' : '';
@@ -892,7 +898,8 @@ function chatDock(key) {
     ? '<div class="dock-in"><textarea id="chat-input" data-key="' + k + '" maxlength="' + MSG_MAX + '" rows="1" placeholder="跟肉咖說這張卡的事…" aria-label="寫給肉咖的訊息（這張卡）">' + esc(d) + '</textarea>' +
       '<button class="btn btn-primary" data-act="msg-send" data-key="' + k + '" type="button">送出</button></div>'
     : '<p class="chat-ro">你的金鑰只能看對話，不能發言。</p>';
-  return '<div class="dock' + (open ? ' open' : '') + '" role="region" aria-label="跟肉咖說"><div class="dock-h"><b>跟肉咖說</b>' + (n ? '<span class="dock-n">' + n + ' 則</span>' : '') + more + '</div>' +
+  return '<div class="dock show' + (open ? ' open' : '') + '" role="region" aria-label="跟肉咖說"><div class="dock-h"><b>跟肉咖說</b>' + (n ? '<span class="dock-n">' + n + ' 則</span>' : '') + more +
+    '<button class="dock-close" data-act="dock-toggle" data-key="' + k + '" type="button" aria-expanded="true">收起</button></div>' +
     (list ? '<div class="dock-th">' + list + '</div>' : '') + input + (can('act') && !n ? '<p class="dock-note">' + MSG_NOTE + '</p>' : '') + '</div>';
 }
 function dockScroll(dr) { const t = dr.querySelector('.dock-th'); if (t) t.scrollTop = t.scrollHeight; }   // 最新的在最下面
@@ -1000,8 +1007,8 @@ const scanOf = k => scanShared(k) ? S.scan.grant : S.scan[k];
 const scanning = k => { const x = scanOf(k); return !!x && (x.status === 'queued' || x.status === 'running'); };
 const hm = ms => { const d = new Date(ms + 8 * H); return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0'); };
 const lastScan = x => x && (x.lastDoneAt || (x.status === 'done' ? x.doneAt : null));
-// 掃描進度（F 兩段式）：排隊中 → 掃描中 → AI 判讀中 → 送進看板中；後端還沒給 phase 時，running 一律寫「掃描中」
-const scanPhase = x => !x ? '' : x.status === 'queued' ? '排隊中' : ({ judging: 'AI 判讀中', sending: '送進看板中' }[x.phase] || '掃描中');
+// 掃描進度（F 兩段式）：排隊中 → 掃描中 → 肉咖判讀中 → 送進看板中；後端還沒給 phase 時，running 一律寫「掃描中」
+const scanPhase = x => !x ? '' : x.status === 'queued' ? '排隊中' : ({ judging: '肉咖判讀中', sending: '送進看板中' }[x.phase] || '掃描中');
 const scanDur = k => k === 'watch' ? '3～5' : '2～5';   // 盯案後續掃描比較久
 function scanBox(k) {
   if (!SCAN_LANES.includes(k)) return '';
@@ -1054,7 +1061,7 @@ async function scanNow(k) {
     if (res) S.scan[k] = Object.assign({}, res, { lastDoneAt: res.lastDoneAt || (prev && prev.lastDoneAt) || null });   // 請求那筆不帶 last_done_at，沿用上次的
     toast(res && res.state === 'already' ? '「' + LN[k] + '」已經在掃描了，全程約 ' + scanDur(k) + ' 分鐘'
       : res && res.state === 'recent' ? '「' + LN[k] + '」15 分鐘內剛掃過，先看看新卡'
-      : '已開始掃描「' + LN[k] + '」，掃描加 AI 判讀全程約 ' + scanDur(k) + ' 分鐘');
+      : '已開始掃描「' + LN[k] + '」，掃描加肉咖判讀全程約 ' + scanDur(k) + ' 分鐘');
   } catch (e) {
     S.scan[k] = prev;   // 回滾
     if (e instanceof AdapterError && e.kind === 'auth') setAuth();
@@ -1254,7 +1261,7 @@ function renderArchivedDrawer(dr) {
     '<button class="btn ' + (real ? 'btn-ghost' : 'btn-primary') + '" data-act="arch-back" type="button">回到封存區</button>' +
     (can('admin') ? '<button class="btn btn-ghost" data-act="arch-reopen" data-id="' + esc(it.id) + '" type="button">重新打開</button>' : '') + purgeBtn(it) + '</div>';
   dr.setAttribute('aria-label', '封存的案子'); dr.dataset.key = it.id + 'archived';
-  dockScroll(dr); chatRestore(keepA); markSeen(it.id);
+  dockScroll(dr); chatRestore(keepA); if (dockShow.has(it.id)) markSeen(it.id);
   dr.classList.add('show');
 }
 // ---------------- 追蹤事項（v7；後端 opp_followup_list／opp_followup_update，sql/27） ----------------
@@ -1563,8 +1570,9 @@ document.addEventListener('click', e => {
       case 'arch-back': openArchive(); break;
       case 'purge-start': S.dlg = { type: 'purge', id, typed: '' }; renderDlg(); break;
       case 'purge-confirm': doPurge(); break;
+      case 'dock-toggle': { const k = act.dataset.key || ''; if (dockShow.has(k)) { dockShow.delete(k); if (!(S.draft.get(k) || '').trim()) S.draft.delete(k); } else dockShow.add(k); renderDrawer(); if (dockShow.has(k)) { const t = $('#chat-input'); t && t.focus({ preventScroll: true }); } break; }
       case 'dock-more': { const k = act.dataset.key || ''; if (dockOpen.has(k)) dockOpen.delete(k); else dockOpen.add(k); renderDrawer(); break; }
-      case 'chat-card': { const it = get(id); if (!it) toast('這張卡已經不在看板上，可以到封存區找'); else openDrawer(id, it.status === 'doing' ? 'progress' : 'preview'); break; }
+      case 'chat-card': { const it = get(id); if (!it) toast('這張卡已經不在看板上，可以到封存區找'); else { dockShow.add(id); openDrawer(id, it.status === 'doing' ? 'progress' : 'preview'); } break; }
       case 'fu-filter': S.fu.filter = act.dataset.f; S.fu.list = null; loadFuList(); renderDrawer(); break;
       case 'fu-card': fuOpenCard(id); break;
       case 'fu-done': case 'fu-drop': S.dlg = { type: 'fu', id, to: act.dataset.act === 'fu-done' ? 'done' : 'dropped', note: '' }; renderDlg(); break;

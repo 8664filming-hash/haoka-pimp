@@ -672,3 +672,16 @@ p,li{text-wrap:pretty}
 .updbar[hidden]{display:none}
 
 .link-badge{display:inline-flex;align-items:center;min-height:26px;padding:0 9px;border-radius:999px;background:var(--first);color:var(--accent-dk);font-size:12.5px;font-weight:800;white-space:nowrap}
+
+/* ===== v7.1：對話列預設收起，展開最多佔畫面 45% ===== */
+.dock-min{padding:6px 16px}
+.dock-toggle{position:relative;align-self:flex-start;min-height:40px;padding:0 14px;border-radius:999px;border:1.5px solid var(--line);background:var(--card);font:inherit;font-size:14.5px;font-weight:800;color:var(--accent-dk)}
+.dock-dot{top:4px;right:4px}
+.dock.show{max-height:45dvh;overflow:hidden}
+.dock.show .dock-th{flex:1 1 auto;min-height:0;max-height:none}
+.dock.show.open .dock-th{max-height:none}
+.dock-close{min-height:36px;padding:0 10px;border-radius:10px;border:1.5px solid var(--line);background:var(--card);font-size:13px;font-weight:700;color:var(--mut);margin-left:auto}
+.dock-more:not(.few)+.dock-close{margin-left:8px}
+.dock.show .dock-more.few{display:none}
+@media (max-width:959px) and (max-height:520px){ .dock.show .dock-th{display:block} }
+.kbopen .dock.show{max-height:calc(100dvh - var(--kb,0px) - 120px)}
