@@ -32,7 +32,7 @@
 //   realbuild    要做之後照真卡流程：排隊 → 建立中 → 建好（看 3 秒快輪詢與第 1 步自動完成）
 //   folderslow   同 realbuild，但 12 秒後才建好
 //   live         9 秒後進來一張新卡（看新進光暈與 toast）
-import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq, normalizeArchived, normalizeFollowups, normalizeFollowup, normalizeEvents, normalizeBulletin } from './adapter.js?v90';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
+import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq, normalizeArchived, normalizeFollowups, normalizeFollowup, normalizeEvents, normalizeBulletin, normalizeDm, normalizeDms, normalizeDmSent } from './adapter.js?v91';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
 
 const H = 3600e3, D = 24 * H, MIN = 60e3;
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -346,7 +346,36 @@ export function mockAdapter(modeStr) {
   if (flags.has('xss')) msgs.push({ id: 'mx', item_id: null, author: XP, body: XP + '\n第二行' + XP, reply_to: null, status: XP, handled_by: XP, created_at: tAgo(5) },
                                   { id: 'mx2', item_id: 'xss-doing', author: RK, body: XP, reply_to: 'mx', status: 'done', handled_by: RK, created_at: tAgo(4) });
   let msgN = 0;
-  const bulT0 = Date.now();   // v81：示意報告的產生時間固定，內容沒變就不會重畫（真後端 generated_at 也是重組才變）
+  const bulT0 = Date.now();
+  // ---------- 私訊通道示意（opp_dm 的欄位格式）：每人一條串，只回 owner＝自己的 ----------
+  // ?mock=dmempty 沒有任何私訊；dmnone 後端還沒有私訊 RPC（入口不出現）；dmfail 讀不到；dmanswered 問答卡已答過；dmnew 4 秒後肉咖回一則（看紅點）
+  const ASK5 = { title: '故宮 142 改稿判斷（示意）', intro: '肉咖整理了 5 個要你拍板的點，一題一題點就好，大約 2 分鐘。', reply_route: '故宮｜蒸餾思路',
+    questions: [
+      { id: 'q0', text: '開場要用館藏特寫，還是先拍觀眾排隊？', note: '上一版用排隊開場，評審說太像新聞。', type: 'single', options: ['館藏特寫', '觀眾排隊', '兩個都拍，剪接時再決定'] },
+      { id: 'q1', text: '旁白要用哪種口吻？', type: 'single', options: ['館員第一人稱', '第三人稱旁白', '不要旁白，只用字卡'] },
+      { id: 'q2', text: '哪些段落可以砍？（可多選）', note: '總長要從 6 分鐘壓到 4 分半。', type: 'multi', options: ['修復室', '典藏庫', '館長訪談', '觀眾訪問'] },
+      { id: 'q3', text: '片尾要不要放 QR code？', type: 'single', options: ['要', '不要'] },
+      { id: 'q4', text: '還有什麼是這次一定要改的？', type: 'text' } ] };
+  const dmAt = m => iso(bulT0 - m * 60e3);
+  let dms = flags.has('dmempty') ? [] : [];
+  const dmSeed = owner => flags.has('dmempty') ? [] : [
+    { id: 'dm-' + owner + '-1', owner, author: '肉咖', kind: 'notice', body: '下週一 10:00 開本月提案會議，地點三樓會議室。提案名單已放在追蹤公告。（示意）', reply_to: null, status: 'done', read_at: dmAt(300), created_at: dmAt(320), payload: null },
+    { id: 'dm-' + owner + '-2', owner, author: owner, kind: 'msg', body: '肉咖，幫我記得週四前要回機關簡報時間。', reply_to: null, status: 'done', read_at: null, created_at: dmAt(90), payload: null },
+    { id: 'dm-' + owner + '-3', owner, author: '肉咖', kind: 'msg', body: '記好了，週三 17:00 提醒你一次。（示意）', reply_to: 'dm-' + owner + '-2', status: 'done', read_at: dmAt(80), created_at: dmAt(85), payload: null },
+    { id: 'dm-' + owner + '-4', owner, author: '示範管理員', kind: 'notice', body: '你的領標付款權限開好了，之後付款按卡片上的「去領標付款」。（示意）', reply_to: null, status: 'done', read_at: null, created_at: dmAt(30), payload: null },
+    { id: 'dm-' + owner + '-ask', owner, author: '肉咖', kind: 'ask', body: '問答卡：' + ASK5.title, reply_to: null, status: 'done', read_at: null, created_at: dmAt(12), payload: ASK5,
+      answered_at: flags.has('dmanswered') ? dmAt(5) : null },
+    ...(flags.has('dmanswered') ? [{ id: 'dm-' + owner + '-ans', owner, author: owner, kind: 'answer', body: '回答：' + ASK5.title, reply_to: 'dm-' + owner + '-ask', status: 'new', read_at: null, created_at: dmAt(5),
+      payload: { answers: { q0: { choice: ['館藏特寫'], other: '', comment: '' }, q1: { choice: [], other: '館員＋字卡混用', comment: '' }, q2: { choice: ['典藏庫', '觀眾訪問'], other: '', comment: '修復室一定要留' }, q3: { choice: [], unknown: true }, q4: { text: '字幕要換成故宮的標準字。' } } } }] : []) ];
+  const dmSeeded = new Set();
+  const dmXss = owner => !flags.has('xss') ? [] : [   // ?mock=xss：私訊與問答卡每個字串都塞 HTML，畫面應全部當文字（window.__xss 不會出現）
+    { id: 'dm-x1-' + owner, owner, author: XP, kind: 'notice', body: XP + ' https://example.com/' , reply_to: null, status: 'done', read_at: null, created_at: dmAt(3), payload: null },
+    { id: 'dm-x2-' + owner, owner, author: '肉咖', kind: 'ask', body: XP, reply_to: null, status: 'done', read_at: null, created_at: dmAt(2),
+      payload: { title: XP, intro: XP, questions: [{ id: 'q0', text: XP, note: XP, type: 'single', options: [XP, '"><svg onload=window.__xss=7>'] }] } } ];
+  const dmMine = () => { const o = me(); if (!dmSeeded.has(o)) { dmSeeded.add(o); dms = dms.concat(dmSeed(o), dmXss(o)); } return dms.filter(m => m.owner === o); };
+  const dmCheck = () => { if (flags.has('dmnone')) throw new AdapterError('server', 'Could not find the function public.opp_dm_list in the schema cache', 404); if (flags.has('dmfail')) throw new AdapterError('network', '連不上伺服器'); };
+  const dmOut = m => normalizeDm(Object.assign({}, m));
+  if (flags.has('dmnew')) setTimeout(() => { dmMine(); dms.push({ id: 'dm-new-' + Date.now(), owner: me(), author: '肉咖', kind: 'msg', body: '週四的簡報時間機關回了：14:00。（示意）', reply_to: null, status: 'done', read_at: null, created_at: iso(Date.now()), payload: null }); ping(); }, 4000);   // v81：示意報告的產生時間固定，內容沒變就不會重畫（真後端 generated_at 也是重組才變）
   // ---------- 追蹤事項示意（opp_followups 的欄位格式） ----------
   const fuAt = h => iso(Date.now() + h * H);
   let fus = flags.has('empty') ? [] : [
@@ -638,6 +667,43 @@ export function mockAdapter(modeStr) {
       ping(); return normalize(Object.assign(card(r), { progress_steps: r.progress_steps }));
     },
     // v81：追蹤公告的每日報告（sql/37）。?mock=nobulletin 模擬 RPC 還沒上線；?mock=bulletinnull 模擬還沒有任何一筆；?mock=bul11 看 11:00 查證版
+    // ---------- 私訊通道（sql/38） ----------
+    async dmList(limit) { await wait(120); dmCheck(); return dmMine().slice().sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).slice(0, limit || 50).map(dmOut); },
+    async dmUnread() { await wait(60); dmCheck(); return dmMine().filter(m => m.author !== me() && !m.read_at).length; },
+    async dmMarkRead() { await wait(80); dmCheck(); const t = iso(Date.now()); dmMine().forEach(m => { if (m.author !== me() && !m.read_at) m.read_at = t; }); return { marked: true }; },
+    async dmAdd(body) {
+      await wait(250); dmCheck();
+      const b = String(body || '').trim(); if (!b) throw new AdapterError('state', 'bad_body: body required', 400);
+      const m = { id: 'dm-' + (++msgN) + '-' + Date.now(), owner: me(), author: me(), kind: 'msg', body: b.slice(0, 2000), reply_to: null, status: 'new', read_at: null, created_at: iso(Date.now()), payload: null };
+      dms.push(m); ping(); return dmOut(m);
+    },
+    async dmAnswer(askId, answers) {
+      await wait(300); dmCheck();
+      const a = dms.find(m => m.id === askId && m.owner === me() && m.kind === 'ask');
+      if (!a) throw new AdapterError('state', 'not_found: ask not found', 404);
+      if (a.answered_at) throw new AdapterError('state', 'already_answered: this card was answered', 409);
+      a.answered_at = iso(Date.now());
+      dms.push({ id: 'dm-ans-' + Date.now(), owner: me(), author: me(), kind: 'answer', body: '回答：' + (a.payload && a.payload.title || ''), reply_to: askId, status: 'new', read_at: null, created_at: iso(Date.now()), payload: { answers } });
+      ping(); return { ok: true };
+    },
+    async dmRecipients() { await wait(100); dmCheck(); if (!flags.has('admin')) throw new AdapterError('perm', 'only admin or planner', 403); return ['巴西', 'CC', '石頭', '阿包', 'Bosen', '示範管理員']; },
+    async dmSend(to, body, kind, payload) {
+      await wait(350); dmCheck();
+      if (!flags.has('admin')) throw new AdapterError('perm', 'only admin or planner', 403);
+      if (!Array.isArray(to) || !to.length || to.length > 20) throw new AdapterError('state', 'bad_recipients: 1 to 20 recipients', 400);
+      if (to.includes('停用的人')) throw new AdapterError('state', 'bad_recipients: inactive key', 400);
+      const t = Date.now();
+      to.forEach((o, i) => { dmMine(); dms.push({ id: 'dm-s-' + t + '-' + i, owner: o, author: me(), kind: kind || 'notice', body: String(body || ''), reply_to: null, status: 'done', read_at: null, created_at: iso(t), payload: payload || null }); });
+      ping(); return { sent: to.length };
+    },
+    async dmSent(limit) {
+      await wait(120); dmCheck();
+      if (!flags.has('admin')) throw new AdapterError('perm', 'only admin', 403);
+      const seed = [{ id: 'x1', owner: '巴西', kind: 'notice', body: '週五前把報價單給 CC 用印。（示意）', created_at: dmAt(200), read_at: dmAt(150) },
+        { id: 'x2', owner: 'CC', kind: 'notice', body: '週五前把報價單給 CC 用印。（示意）', created_at: dmAt(200), read_at: null },
+        { id: 'x3', owner: '石頭', kind: 'ask', body: '問答卡：器材借用', created_at: dmAt(60), read_at: dmAt(40), answered_at: dmAt(35), payload: { title: '器材借用（示意）', questions: [{ id: 'q0', text: '要借哪台？', type: 'text' }] } }];
+      return normalizeDmSent(dms.filter(m => m.author === me() && m.owner !== me()).concat(flags.has('dmempty') ? [] : seed).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).slice(0, limit || 50));
+    },
     async bulletin() {
       await wait(140);
       if (flags.has('offline')) throw new AdapterError('network', '連不上伺服器');

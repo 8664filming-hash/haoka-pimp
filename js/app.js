@@ -1,8 +1,9 @@
 // 好咖皮條客主程式 v90（v3 新設計：首頁五個房間 × 暮光色塊，外觀每人自選）。
 // 只透過 adapter.js 取得與寫入資料；資料、權限、RPC 與 v81 完全相同，換的是畫面與互動。
 // 設計稿：AI工作夾/1122_皮條客_樣張/皮條客_設計v3.html；功能對照：AI工作夾/1122_皮條客_v3備料/01_功能對照表.md
-import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl, RK, SCAN_LANES, SKINS } from './adapter.js?v90';   // ?v 跟 version.json 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
-import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v90';
+import { createAdapter, CONFIG, AdapterError, hasKey, keyTag, tokenFrom, saveKey, safeUrl, RK, SCAN_LANES, SKINS } from './adapter.js?v91';   // ?v 跟 version.json 一起換（GitHub Pages 會快取 10 分鐘，不帶版本號會新舊混搭）
+import { makeDm } from './dm.js?v91';   // 私訊通道＋問答卡（sql/38）
+import { esc, H, D, URGENT_DAYS, fmtDate, fmtDay, fmtClock, relTime, fmtLeft, shortLeft, softBreak, splitAmount } from './util.js?v91';
 
 const $ = s => document.querySelector(s);
 const LANES = [
@@ -86,6 +87,7 @@ const S = {
   bidPage: null, bidForm: { amount: '', receipt: '', note: '' }, bidSumOpen: new Set(), mine: false, presence: null, presOpen: new Set(), presOff: false,
   fx: new Set(),   // v90：收合列展開中的 key（說明、全部步驟、案件資料…）
   cx: new Set(),   // v90：卡片「⋯」展開中的卡
+  dm: { list: null, err: false, sig: '', ticket: 0, unread: 0, off: false, draft: '', pend: [], fresh: new Set(), ask: new Map(), done: new Map(), cmp: null, rcp: null, sent: null },   // 私訊通道（sql/38）
   skin: 1, prefRemote: null, prefBusy: false,   // v90：外觀（1 暮光色塊、2 片場夜拍、3 黑白場記板）；prefRemote：true＝跟著金鑰、false＝後端還沒開
 };
 let api, lastFocus = null, depth = 0, ignorePop = false;
@@ -396,14 +398,14 @@ function homePage() {
   return hello() + band + '<div class="rooms">' + room('active') + room('tender') + room('grant') + room('pitch') + room('watch') + '</div>' + rkStrip() + homeFoot();
 }
 function rkState() { return SCAN_LANES.some(scanning) ? 'think' : [...S.pend.values()].some(l => l.length) ? 'speak' : 'idle'; }
-const rkFace = (cls) => '<span class="rk' + (cls ? ' ' + cls : '') + '" data-st="' + rkState() + '" aria-hidden="true"><img alt="" src="icons/rouka.jpg?v90"></span>';
+const rkFace = (cls) => '<span class="rk' + (cls ? ' ' + cls : '') + '" data-st="' + rkState() + '" aria-hidden="true"><img alt="" src="icons/rouka.jpg?v91"></span>';
 function rkStrip() {
   const lasts = SCAN_LANES.map(k => lastScan(scanOf(k))).filter(Boolean), last = lasts.length ? Math.max(...lasts) : 0;
   const n = unreadReplies().length;
   const t = SCAN_LANES.some(scanning) ? '掃描中，掃完判讀過才會上看板' : n ? '有 ' + n + ' 則新回覆' : last ? (tnow() - last < D ? hm(last) : fmtDay(last)) + ' 掃過一輪，有事直接跟牠說' : '有事直接跟牠說';
   return '<div class="rks r3"><button class="rkm" type="button" data-act="open-chat">' + rkFace() + '<span class="tx"><b>肉咖</b><span>' + esc(t) + '</span></span><span class="ar" aria-hidden="true">›</span></button></div>';
 }
-const homeFoot = () => '<button class="skl" type="button" data-act="open-skin"><span>外觀</span><b>' + SKINS[S.skin] + '</b><span class="ar" aria-hidden="true">›</span></button><div class="foot"><img alt="好咖 BUDDY PLUS!" src="icons/logo.png?v90"><span>好咖皮條客 ' + esc(APP_V) + '</span></div>';
+const homeFoot = () => '<button class="skl" type="button" data-act="open-skin"><span>外觀</span><b>' + SKINS[S.skin] + '</b><span class="ar" aria-hidden="true">›</span></button><div class="foot"><img alt="好咖 BUDDY PLUS!" src="icons/logo.png?v91"><span>好咖皮條客 ' + esc(APP_V) + '</span></div>';
 
 // ---------------- 畫面：籃頁（房間頂只留名字、數量、狀態；其餘收進「說明」） ----------------
 function laneHead(k, n) {
@@ -951,7 +953,7 @@ function renderFuBtn() {
   b.hidden = S.net === 'auth' || !api || (!api.followupList && !api.bulletin);
   const l = S.fu.open || [], fn = l.length, over = l.filter(fuOverdue).length, today = l.filter(fuToday).length;
   const urg = bulUrgent(), n = urg + fn;
-  b.innerHTML = '追蹤公告' + (n ? '<b class="bdg">' + n + '</b>' : '');
+  b.innerHTML = '<span class="tl-l">追蹤</span>公告' + (n ? '<b class="bdg">' + n + '</b>' : '');   // 窄螢幕只顯示「公告」（頂列多了私訊）
   b.setAttribute('aria-label', '追蹤公告' + (urg ? '，' + urg + ' 案今明兩天截止' : '') + (fn ? '，' + fn + ' 件追蹤未完成' + (over ? '，' + over + ' 件逾期' : '') + (today ? '，' + today + ' 件今天到期' : '') : ''));
 }
 const BUL_SEC = { schedule: '行程', bid: '領標', followup: '追蹤事項', summary: '摘要' };
@@ -1064,6 +1066,8 @@ function renderDrawer() {
   const v = S.drawer.view;
   let it = null, view = null;
   if (v === 'chat') view = chatView();
+  else if (v === 'dm') view = DM.dmView();
+  else if (v === 'dmsend') view = DM.dmSendView();
   else if (v === 'followups') view = fuView();
   else if (v === 'skin') view = skinView();
   else if (v === 'archived') { it = S.archMap.get(S.drawer.id); if (!it) { closeDrawer(true); goTab('archive'); return; } view = dockShow.has(it.id) ? cardChatView(it) : archivedView(it); }
@@ -1081,15 +1085,15 @@ function renderDrawer() {
   if (!dr.classList.contains('show')) dr.style.animation = ''; else if (same) dr.style.animation = 'none';
   dr.dataset.key = key;
   const db = dr.querySelector('.db');
-  db.scrollTop = same ? sc : (dr.querySelector('.msgs') && (v === 'chat' || dockShow.has(S.drawer.id)) ? db.scrollHeight : 0);
+  db.scrollTop = same ? sc : (dr.querySelector('.msgs') && (v === 'chat' || v === 'dm' || dockShow.has(S.drawer.id)) ? db.scrollHeight : 0);
   dr.classList.add('show');
   chatRestore(keep);
   if (v === 'chat') markSeen(''); else if (it && dockShow.has(it.id)) markSeen(it.id);
 }
 function renderAll() {
   renderLive(); renderNotice(); renderMain(); renderSheet();
-  if (S.drawer) { if (!['chat', 'archived', 'followups', 'skin'].includes(S.drawer.view) && !get(S.drawer.id)) closeDrawer(true); else renderDrawer(); }
-  renderDlg(); renderRk(); renderFuBtn(); syncOverlay();
+  if (S.drawer) { if (!['chat', 'archived', 'followups', 'skin', 'dm', 'dmsend'].includes(S.drawer.view) && !get(S.drawer.id)) closeDrawer(true); else renderDrawer(); }
+  renderDlg(); renderRk(); renderFuBtn(); DM.renderDmBtn(); syncOverlay();
 }
 
 // ---------------- 疊層開關 ----------------
@@ -1262,7 +1266,7 @@ function renderRk() {
   const b = $('#rkbtn'); if (!b) return;
   const n = unreadReplies().length;
   b.hidden = S.net === 'auth';
-  b.innerHTML = rkFace() + '肉咖' + (n ? '<i class="rk-dot" aria-hidden="true"></i>' : '');
+  b.innerHTML = rkFace() + '<span class="tl-l">肉咖</span>' + (n ? '<i class="rk-dot" aria-hidden="true"></i>' : '');   // 窄螢幕只留頭像
   b.setAttribute('aria-label', '跟肉咖說' + (n ? '，有 ' + n + ' 則新回覆' : ''));
 }
 async function ensureMsgs(key, force) {
@@ -1334,8 +1338,8 @@ function toggleDock(k) {
   renderDrawer();
   if (dockShow.has(k)) { markSeen(k); $('#chat-input')?.focus({ preventScroll: true }); }
 }
-const KEEP_IDS = ['chat-input', 'bid-amt', 'bid-rc', 'bid-note'];
-function chatFocus() { const a = document.activeElement; return a && KEEP_IDS.includes(a.id) ? [a.selectionStart, a.selectionEnd, a.id] : null; }
+const KEEP_IDS = ['chat-input', 'bid-amt', 'bid-rc', 'bid-note', 'dm-input'];
+function chatFocus() { const a = document.activeElement; return a && a.id && (KEEP_IDS.includes(a.id) || (a.dataset && a.dataset.keep)) ? [a.selectionStart, a.selectionEnd, a.id] : null; }   // data-keep：私訊與問答卡的輸入框，重畫後游標留在原位
 function chatRestore(k) { if (!k) return; const t = document.getElementById(k[2] || 'chat-input'); if (t) { t.focus({ preventScroll: true }); try { t.setSelectionRange(k[0], k[1]); } catch (e) {} } }
 async function msgSend(key) {
   const text = (S.draft.get(key) || '').trim();
@@ -1365,12 +1369,14 @@ document.addEventListener('input', e => {
   const bf = { 'bid-amt': 'amount', 'bid-rc': 'receipt', 'bid-note': 'note' }[e.target.id];
   if (bf) { S.bidForm[bf] = e.target.value; return; }
   if (e.target.id === 'step-note' && S.dlg) { S.dlg.note = e.target.value; return; }
+  if (DM.dmInput(e.target)) return;
   if (e.target.id !== 'chat-input') return;
   S.draft.set(e.target.dataset.key || '', e.target.value);
   e.target.style.height = '48px'; e.target.style.height = Math.min(120, e.target.scrollHeight + 2) + 'px';
 });
 document.addEventListener('keydown', e => {
   if (e.target.id === 'chat-input' && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); msgSend(e.target.dataset.key || ''); }
+  if (e.target.id === 'dm-input' && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); DM.dmSendMine(); }
 });
 
 // ---------------- 立即掃描（後端 opp_scan_request／opp_scan_status） ----------------
@@ -1693,7 +1699,7 @@ async function refresh() {
     if (dr && viewOf() === 'progress') { ensureProgress(dr.id); if ([...stepOpen].some(k => k.startsWith(dr.id + '|')) || S.fx.has('cur-' + dr.id)) ensureEvents(dr.id, true); }
     // v90：首頁的「輪到你」、房間的方塊頭像都要步驟負責人，進行中的卡一律補抓步驟（唯讀也抓，v81 只在 act 時抓）
     items().filter(i => laneOf(i) === 'active' && i.progressStatus !== 'done').forEach(i => ensureProgress(i.id));
-    loadMsgs(); loadScan(); loadFu(); loadBul();
+    loadMsgs(); loadScan(); loadFu(); loadBul(); DM.loadDm();
   } catch (e) {
     if (e instanceof AdapterError && e.kind === 'auth') setAuth(); else S.net = 'offline';
   } finally {
@@ -1747,6 +1753,12 @@ document.addEventListener('click', e => {
     case 'close-hold': closeSheet(); break;
     case 'open-hold': if (S.drawer) closeDrawer(true); openSheet(); break;
     case 'open-chat': if (S.sheet) closeSheet(); openChat(); break;
+    case 'open-dm': if (S.sheet) closeSheet(); DM.openDm(); break;
+    case 'dm-send': DM.dmSendMine(); break;
+    case 'dm-compose': DM.openDmCompose(); break;
+    case 'dm-back': S.drawer = { id: '__dm', view: 'dm' }; DM.loadDmList(); renderDrawer(); break;
+    case 'ask-opt': case 'ask-other': case 'ask-unk': case 'ask-bg': case 'ask-prev': case 'ask-next': case 'ask-goto': case 'ask-submit': DM.askAct(act); break;
+    case 'dm-to': case 'dm-to-all': case 'dm-mode': case 'dm-qtype': case 'dm-qflag': case 'dm-qadd': case 'dm-qdel': case 'dm-preview': case 'dm-edit': case 'dm-go': DM.dmCmpAct(act); break;
     case 'open-fu': if (S.sheet) closeSheet(); openFu(); break;
     case 'upd': doUpdate(true); break;
     case 'open-skin': openPanel('skin'); break;
@@ -1796,7 +1808,7 @@ function openChat() { if (!S.drawer) lastFocus = document.activeElement; S.drawe
 function openFu() { if (!S.drawer) lastFocus = document.activeElement; S.drawer = { id: '__fu', view: 'followups' }; if (S.fu.filter === 'open' && S.fu.open) S.fu.list = S.fu.open; else S.fu.list = null; loadFuList(); loadBul(true); renderDrawer(); syncOverlay(); $('#drawer .xb')?.focus({ preventScroll: true }); }
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') { const dk = S.drawer && S.drawer.id;
-    if (S.dlg) closeDlg(); else if (S.bidPage) { S.bidPage = null; renderDrawer(); } else if (dk && dockShow.has(dk)) toggleDock(dk); else if (S.drawer) closeDrawer(); else if (S.sheet) closeSheet(); return; }
+    if (S.dlg) closeDlg(); else if (S.drawer && S.drawer.view === 'dmsend') { S.drawer = { id: '__dm', view: 'dm' }; renderDrawer(); } else if (S.bidPage) { S.bidPage = null; renderDrawer(); } else if (dk && dockShow.has(dk)) toggleDock(dk); else if (S.drawer) closeDrawer(); else if (S.sheet) closeSheet(); return; }
   if (e.key === 'Tab' && (S.dlg || S.drawer || S.sheet)) {
     const box = S.dlg ? $('#dlg') : S.drawer ? $('#drawer') : $('#sheet');
     const f = [...box.querySelectorAll('button,a[href],input,textarea,select,summary,[tabindex="0"]')].filter(x => !x.disabled && x.offsetParent !== null);
@@ -1855,6 +1867,9 @@ function renderNoKey() {
   $('#live').innerHTML = '<i class="dot off"></i>還沒有金鑰';
   $('#main').innerHTML = '<div class="empty"><b>需要你的專屬網址</b><p>請用大器私訊給你的專屬網址打開，或從手機主畫面的『好咖皮條客』打開。在 LINE 裡點開的話，請按右下角用 Safari 或 Chrome 開啟。</p><button class="bp" data-act="paste-key" type="button">貼上金鑰</button></div>';
 }
+// 私訊通道＋問答卡：放在這裡建立，前面所有工具（reason、setAuth…）都已經定義好
+const DM = makeDm({ S, $, esc, para, relTime, tnow, can, myName, rkFace, toast, renderDrawer, syncOverlay, closeDrawer, setAuth, renderAll, reason, AdapterError, keyTag, qs,
+  api: () => api, setLastFocus: () => { if (!S.drawer) lastFocus = document.activeElement; } });
 (async function boot() {
   if (!hasKey() && !new URLSearchParams(location.search).has('mock')) { renderNoKey(); startUpdates(); return; }
   api = await createAdapter();

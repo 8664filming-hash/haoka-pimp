@@ -19,7 +19,7 @@
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v81">
 <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v81">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png?v81">
-<link rel="stylesheet" href="css/app.css?v90">
+<link rel="stylesheet" href="css/app.css?v91">
 <!-- 網路字型只當加分：不擋畫面，載入完再換上；沒網路時走系統字型。 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -34,6 +34,7 @@
     <div class="trow"><h1>好咖皮條客</h1>
       <div class="tbtn">
         <button class="tb" id="fubtn" data-act="open-fu" type="button" aria-haspopup="dialog" hidden>追蹤公告</button>
+        <button class="tb dmb" id="dmbtn" data-act="open-dm" type="button" aria-haspopup="dialog" hidden>私訊</button>
         <button class="tb rkb" id="rkbtn" data-act="open-chat" type="button" aria-haspopup="dialog">肉咖</button>
       </div>
     </div>
@@ -50,6 +51,6 @@
 <div id="dlg" hidden></div>
 <div id="toast" role="status" aria-live="polite" hidden></div>
 <!-- 改版時 css／js 網址後面的 ?v 要跟 version.json、sw.js 的 CACHE 一起換，手機才不會拿到新舊混搭的檔 -->
-<script type="module" src="js/app.js?v90"></script>
+<script type="module" src="js/app.js?v91"></script>
 </body>
 </html>

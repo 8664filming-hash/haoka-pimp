@@ -31,7 +31,9 @@ export const CONFIG = {
   TIMEOUT_MS: 15000,       // 一般請求逾時
   SLOW_MS: 3000,           // 超過這麼久還沒回來，就顯示「載入比較久」
   GONE_HOURS: 72,
-  RPC: { whoami: 'opp_whoami', list: 'opp_list', get: 'opp_get', progress: 'opp_progress', topic: 'get_opp_realtime_topic',
+  RPC: { dmList: 'opp_dm_list', dmAdd: 'opp_dm_add', dmMarkRead: 'opp_dm_mark_read', dmUnread: 'opp_dm_unread',   // 私訊通道（sql/38，D 做）：前端只用本人的串
+         dmRecipients: 'opp_dm_recipients', dmSend: 'opp_dm_send', dmSent: 'opp_dm_sent', dmAnswer: 'opp_dm_answer',   // admin 發單獨公告／問答卡、看已讀；opp_dm_pending／opp_dm_mark 只給 planner，前端不碰
+         whoami: 'opp_whoami', list: 'opp_list', get: 'opp_get', progress: 'opp_progress', topic: 'get_opp_realtime_topic',
          dive: 'opp_dive', stash: 'opp_stash', unstash: 'opp_unstash', drop: 'opp_drop', restore: 'opp_restore', build: 'opp_build',
          msgAdd: 'opp_msg_add', msgList: 'opp_msg_list', msgDelete: 'opp_msg_delete', msgClear: 'opp_msg_clear',   // 刪對話（sql/33，只有 admin）   // 跟肉咖說（sql/24，C 做）
          scanRequest: 'opp_scan_request', scanStatus: 'opp_scan_status',   // 立即掃描（C 做）
@@ -88,7 +90,7 @@ export async function createAdapter() {
   const configured = CONFIG.SUPABASE_URL.startsWith('http') && !CONFIG.SUPABASE_URL.includes('YOUR-PROJECT-REF') && !CONFIG.SUPABASE_ANON_KEY.startsWith('YOUR-');
   if (!configured) console.info('[好咖皮條客] adapter.js 的 SUPABASE_URL / SUPABASE_ANON_KEY 還是待填佔位，目前顯示示範資料');
   if (hasKey() && !forceMock && configured) return liveAdapter();
-  const { mockAdapter } = await import('./mock.js?v90');   // ?v 跟 sw.js 的 CACHE 一起換
+  const { mockAdapter } = await import('./mock.js?v91');   // ?v 跟 sw.js 的 CACHE 一起換
   return mockAdapter(forceMock ? mockFlag : '');
 }
 
@@ -185,6 +187,40 @@ export function normalizeMsg(m) {
 // v81：追蹤公告的每日報告（sql/37 opp_bulletin_get）→ { body, sections, generatedAt, source } 或 null（還沒有任何一筆）
 // deadline 沒帶時區（"2026-11-18T10:00"）一律當台灣時間；days_left 前端會照 deadline 重算，報告舊了倒數也不會錯
 const bulTs = v => { const s = str(v).trim(); if (!s) return null; const m = s.match(/^\d{4}-\d\d-\d\d(T\d\d:\d\d(:\d\d(\.\d+)?)?)?$/); return ts(m ? s + (m[1] ? '' : 'T00:00') + '+08:00' : s); };
+// ---------- 私訊通道（sql/38）：每人一條跟肉咖的串，只有本人看得到 ----------
+// kind：msg＝本人或肉咖講的話；notice＝單獨公告；ask＝問答卡組（payload）；answer＝本人的回答（reply_to 指向 ask）
+export const DM_KINDS = ['msg', 'notice', 'ask', 'answer'];
+const clip = (v, n) => str(v).trim().slice(0, n);
+export function normalizeAsk(p) {   // 問答卡組 payload：{title, intro, questions:[{id,text,note,type,options,other,unknown,comment}]}；格式不對回 null
+  if (typeof p === 'string') { try { p = JSON.parse(p); } catch (e) { return null; } }
+  if (!p || typeof p !== 'object' || !Array.isArray(p.questions)) return null;
+  const qs = p.questions.filter(q => q && typeof q === 'object' && str(q.text).trim()).slice(0, 10).map((q, i) => {
+    const type = ['single', 'multi', 'text'].includes(q.type) ? q.type : 'single';
+    const options = type === 'text' ? [] : (Array.isArray(q.options) ? q.options : []).map(o => clip(o, 80)).filter(Boolean).slice(0, 12);
+    return { id: clip(q.id, 40) || 'q' + i, text: clip(q.text, 120), note: clip(q.note, 400), type: type !== 'text' && !options.length ? 'text' : type, options,
+      other: q.other !== false && type !== 'text', unknown: q.unknown !== false, comment: q.comment !== false && type !== 'text' };
+  });
+  return qs.length ? { title: clip(p.title, 60) || '問答卡', intro: clip(p.intro, 160), questions: qs } : null;
+}
+export function normalizeAnswers(a) {   // {qid:{choice:[], other:'', comment:'', text:'', unknown:true}}
+  if (typeof a === 'string') { try { a = JSON.parse(a); } catch (e) { return {}; } }
+  const out = {};
+  if (a && typeof a === 'object' && !Array.isArray(a)) Object.keys(a).forEach(k => { const x = a[k]; if (!x || typeof x !== 'object') return;
+    out[k] = { choice: (Array.isArray(x.choice) ? x.choice : []).map(str), other: str(x.other), comment: str(x.comment), text: str(x.text), unknown: !!x.unknown }; });
+  return out;
+}
+export function normalizeDm(m) {
+  const kind = DM_KINDS.includes(m.kind) ? m.kind : 'msg';
+  const pl = m.payload == null ? null : m.payload;
+  return { id: str(m.id), owner: str(m.owner), author: nick(str(m.author)), authorRaw: str(m.author), kind, mine: m.mine == null ? str(m.author) === str(m.owner) : !!m.mine, body: str(m.body), replyTo: m.reply_to == null ? '' : str(m.reply_to),
+    status: str(m.status), readAt: ts(m.read_at), createdAt: ts(m.created_at), answeredAt: ts(m.answered_at),
+    ask: kind === 'ask' ? normalizeAsk(pl) : null, answers: kind === 'answer' ? normalizeAnswers(pl && pl.answers ? pl.answers : pl) : null };
+}
+export const normalizeDms = d => (Array.isArray(d) ? d : (d && Array.isArray(d.items) ? d.items : [])).filter(x => x && typeof x === 'object' && x.id != null).map(normalizeDm);
+const dmSentRow = x => ({ id: str(x.id), to: str(x.to || x.owner), kind: DM_KINDS.includes(x.kind) ? x.kind : 'notice', body: str(x.body), createdAt: ts(x.created_at), readAt: ts(x.read_at), answeredAt: ts(x.answered_at),
+  title: str(x.title) || (normalizeAsk(x.payload) || {}).title || '' });   // sql/38 opp_dm_sent 回 {id,to,kind,body,title,created_at,read_at,answered_at}
+export const normalizeDmSent = d => (Array.isArray(d) ? d : (d && Array.isArray(d.items) ? d.items : [])).filter(x => x && typeof x === 'object').map(dmSentRow);
+const unreadN = d => { const v = d && typeof d === 'object' ? (d.unread ?? d.count ?? d.n) : d; const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0; };
 export function normalizeBulletin(d) {
   if (Array.isArray(d)) d = d[0];
   if (!d || typeof d !== 'object') return null;
@@ -332,7 +368,16 @@ function liveAdapter() {
     // 誰接進來了（sql/35，只有 admin）
     async presence() { const d = await rpc(R.presence, {}); return (Array.isArray(d) ? d : []).filter(x => x && x.name).map(x => ({ name: str(x.name), kind: str(x.kind), firstSeenAt: ts(x.first_seen_at), lastSeenAt: ts(x.last_seen_at), seenCount: int(x.seen_count) || 0, lastActionAt: ts(x.last_action_at), status: str(x.status), statusText: str(x.status_text) })); },
     async events(id, limit) { return normalizeEvents(await rpc(R.events, { p_id: id, p_limit: limit || 100 })); },
-    async bulletin() { return normalizeBulletin(await rpc(R.bulletin, {})); },   // v81（sql/37）
+    async bulletin() { return normalizeBulletin(await rpc(R.bulletin, {})); },
+    // 私訊通道（sql/38）
+    async dmList(limit, before) { return normalizeDms(await rpc(R.dmList, { p_limit: limit || 50, p_before: before || null })); },
+    async dmAdd(body) { const d = await rpc(R.dmAdd, { p_body: body }); const one = Array.isArray(d) ? d[0] : d; return one && typeof one === 'object' && one.id != null ? normalizeDm(one) : null; },
+    async dmMarkRead() { return await rpc(R.dmMarkRead, {}); },
+    async dmUnread() { return unreadN(await rpc(R.dmUnread, {})); },
+    async dmRecipients() { const d = await rpc(R.dmRecipients, {}); return (Array.isArray(d) ? d : []).map(x => typeof x === 'string' ? x : x && (x.name || x.role)).map(str).filter(Boolean); },
+    async dmSend(to, body, kind, payload) { return await rpc(R.dmSend, { p_to: to, p_body: body, p_kind: kind || 'notice', ...(payload ? { p_payload: payload } : {}) }); },
+    async dmSent(limit) { return normalizeDmSent(await rpc(R.dmSent, { p_limit: limit || 50 })); },
+    async dmAnswer(askId, answers) { return await rpc(R.dmAnswer, { p_ask_id: askId, p_answers: answers }); },   // v81（sql/37）
     async followupUpdate(fid, patch) { const d = await rpc(R.followupUpdate, { p_fid: fid, p_patch: patch }); const one = Array.isArray(d) ? d[0] : d; return one && typeof one === 'object' && one.id != null ? normalizeFollowup(one) : null; },
     async purge(id, title) { return await rpc(R.purge, { p_id: id, p_confirm_title: title }); },
     async scanStatus() { return normalizeScans(await rpc(R.scanStatus, {})); },

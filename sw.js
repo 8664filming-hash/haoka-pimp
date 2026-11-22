@@ -9,7 +9,7 @@
 // 3. install 就 skipWaiting、activate 就 clients.claim：同事主畫面上開著的舊版（v81）不用重裝、不用滑掉，
 //    v81 頁面自己會發現 version.json 變了 → 請 SW 換新 → 重新整理一次就是 v90（見備料 03_SW更新方案與本機驗證.md）。
 // 發版：這支只改 VERSION 一行（跟 version.json、所有 ?vN 同一個字）。
-const VERSION = 'v90';
+const VERSION = 'v91';
 const PREFIX = 'opp-co-shell';
 const CACHE = PREFIX + '-' + VERSION;
 const SHELL = ['./', 'index.html'];
