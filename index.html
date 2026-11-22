@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hant">
+<html lang="zh-Hant" data-skin="1" data-layout="2" data-tab="today">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -7,52 +7,49 @@
 <meta name="description" content="政府標案、補助徵件、企劃提案與進行中進度，集中在這裡看">
 <meta name="robots" content="noindex,nofollow">
 <meta name="referrer" content="no-referrer">
-<meta name="theme-color" content="#2b7a70">
-<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#07060d">
+<meta name="color-scheme" content="dark light">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="皮條客">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
+<!-- v90：manifest 與圖示的網址刻意維持 v81 那一版的寫法不動（Borry 2026-11-22：不要讓同事重新下載；manifest 的 start_url／scope／icon 不改）。
+     manifest 本身沒有 start_url／scope，主畫面圖示開的是當初加入時的網址（含 ?k=），換版不影響。 -->
 <link rel="manifest" href="manifest.webmanifest?v81">
-<!-- 圖示：2026-11-16 新 icon（深藍底、米白長方塊、半深藍半橘紅的圓），檔名帶 ?v，iOS 才會抓新圖 -->
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v81">
 <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v81">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png?v81">
-<link rel="stylesheet" href="css/app.css?v81">
-<!-- 網路字型只當加分：不擋畫面，載入完用 swap 換上；沒網路時走 css 裡的系統字型。 -->
+<link rel="stylesheet" href="css/app.css?v90">
+<!-- 網路字型只當加分：不擋畫面，載入完再換上；沒網路時走系統字型。 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" media="print" onload="this.media='all'" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;800&family=Noto+Serif+TC:wght@600;900&display=swap">
-<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;800&family=Noto+Serif+TC:wght@600;900&display=swap"></noscript>
+<link rel="stylesheet" media="print" onload="this.media='all'" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@700;800&family=IBM+Plex+Mono:wght@600&family=Noto+Sans+TC:wght@400;500;700;900&display=swap">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@700;800&family=IBM+Plex+Mono:wght@600&family=Noto+Sans+TC:wght@400;500;700;900&display=swap"></noscript>
 </head>
 <body>
-<div class="app" id="app">
-  <header class="top">
-    <div class="top-l">
-      <h1>好咖皮條客</h1>
-      <p class="live" id="live" role="status"></p>
+<button id="updbar" data-act="upd" type="button" hidden>有新版本，點一下更新</button>
+<div class="field" aria-hidden="true"></div>
+<div id="app">
+  <header id="top">
+    <div class="trow"><h1>好咖皮條客</h1>
+      <div class="tbtn">
+        <button class="tb" id="fubtn" data-act="open-fu" type="button" aria-haspopup="dialog" hidden>追蹤公告</button>
+        <button class="tb rkb" id="rkbtn" data-act="open-chat" type="button" aria-haspopup="dialog">肉咖</button>
+      </div>
     </div>
-    <div class="top-r">
-      <p class="sum" id="sum"></p>
-      <button class="fubtn" id="fubtn" type="button" aria-haspopup="dialog" aria-label="追蹤事項" hidden><span class="full">追蹤事項</span><span class="short">追蹤</span></button>
-      <button class="archbtn" id="archbtn" type="button" aria-haspopup="dialog" aria-label="封存區"><span class="full">封存區</span><span class="short">封存</span></button>
-      <button class="rkbtn" id="rkbtn" type="button" aria-haspopup="dialog" aria-label="跟肉咖說"><span>肉咖</span></button>
-      <button class="holdbtn" id="holdbtn" type="button" aria-haspopup="dialog"></button>
-    </div>
-    <div class="hotrow" id="hot"></div>
+    <div class="tmeta"><span class="conn" id="live" role="status"></span><button class="lk" id="holdbtn" data-act="open-hold" type="button" aria-haspopup="dialog" hidden></button></div>
+    <div id="hot" hidden></div>
   </header>
-  <div class="notice" id="notice" hidden role="status"></div>
-  <nav class="tabs" id="tabs" role="tablist" aria-label="五個籃子"></nav>
-  <main class="board" id="board"><div class="lanes" id="lanes"></div></main>
+  <div class="note" id="notice" hidden role="status"></div>
+  <nav id="tabs" aria-label="分頁"></nav>
+  <main id="main"></main>
 </div>
-<button class="hpill" id="hpill" type="button" aria-haspopup="dialog"></button>
-<div class="scrim" id="scrim"></div>
-<aside class="panel sheet" id="sheet" role="dialog" aria-modal="true" aria-label="待決區"></aside>
-<aside class="panel drawer" id="drawer" role="dialog" aria-modal="true" aria-label="詳細資料"></aside>
-<div class="dlg-wrap" id="dlg" hidden><div class="dlg" role="dialog" aria-modal="true" aria-labelledby="dlg-t"></div></div>
-<div id="toast" role="status" aria-live="polite"></div>
-<button class="updbar" id="updbar" type="button" hidden>有新版本，點一下更新</button>
-<!-- 改版時 css／js 網址後面的 ?v 要跟 sw.js 的 CACHE 一起換，手機才不會拿到新舊混搭的檔 -->
-<script type="module" src="js/app.js?v81"></script>
+<div id="scrim"></div>
+<aside class="panel" id="sheet" role="dialog" aria-modal="true" aria-label="待決區"></aside>
+<aside class="panel" id="drawer" role="dialog" aria-modal="true" aria-label="詳細資料"></aside>
+<div id="dlg" hidden></div>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+<!-- 改版時 css／js 網址後面的 ?v 要跟 version.json、sw.js 的 CACHE 一起換，手機才不會拿到新舊混搭的檔 -->
+<script type="module" src="js/app.js?v90"></script>
 </body>
 </html>

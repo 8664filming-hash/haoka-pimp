@@ -32,7 +32,7 @@
 //   realbuild    要做之後照真卡流程：排隊 → 建立中 → 建好（看 3 秒快輪詢與第 1 步自動完成）
 //   folderslow   同 realbuild，但 12 秒後才建好
 //   live         9 秒後進來一張新卡（看新進光暈與 toast）
-import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq, normalizeArchived, normalizeFollowups, normalizeFollowup, normalizeEvents, normalizeBulletin } from './adapter.js?v81';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
+import { AdapterError, normalize, normalizeMsg, RK, normalizeScan, normalizeScans, normalizeScanReq, normalizeArchived, normalizeFollowups, normalizeFollowup, normalizeEvents, normalizeBulletin } from './adapter.js?v90';   // 網址要和 app.js 匯入的一模一樣，才是同一份模組
 
 const H = 3600e3, D = 24 * H, MIN = 60e3;
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -384,12 +384,18 @@ export function mockAdapter(modeStr) {
     n.deadline_text = fmtTxt(n.deadline); rows.unshift(n); ping();
   }, 9000);
 
+  // v90：每人外觀（真後端是 opp_pref_get／opp_pref_set，還沒上線）。?mock=noprefs 模擬後端還沒有這兩支
+  let prefs = null;
+  const noPrefs = () => { if (flags.has('noprefs')) throw new AdapterError('missing', 'Could not find the function public.opp_pref_get', 404); };
   return {
     mode: 'mock',
+    async prefGet() { await wait(60); noPrefs(); return prefs ? Object.assign({}, prefs) : null; },
+    async prefSet(p) { await wait(120); noPrefs(); prefs = Object.assign({}, prefs || {}, p); return Object.assign({}, prefs); },
     async whoami() {
       await wait(80);
       if (flags.has('auth')) throw new AdapterError('auth', 'invalid key', 401);
       const demoted = flags.has('demote') && whoN++ > 0;
+      if (flags.has('bosen')) return { role: 'Bosen', kind: 'operator', aliases: ['Bosen', '蔡博森'], caps: { read: true, act: true, add: false, edit: false, fulltext: false, remind: false, progress: false, notion: false, mac: false, admin: false, pay: false, build_tender: false } };   // ?mock=bosen：一般同事（沒有政府標案要做、沒有領標付款）
       if (flags.has('cc')) return { role: 'CC', kind: 'operator', aliases: ['CC', '行政'], caps: { read: true, act: true, add: false, edit: false, fulltext: false, remind: false, progress: false, notion: false, mac: false, admin: false, pay: true } };   // ?mock=cc：負責用印那步的同事，有領標付款權限
       if (demoted) return { role: '示範降權', kind: 'viewer', caps: { read: true, act: false, add: false, edit: false, fulltext: false, remind: false, progress: false, notion: false, mac: false, admin: false } };
       return viewer

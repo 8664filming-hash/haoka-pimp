@@ -15,6 +15,7 @@
 //   await api.archive(id, kind, note)／unarchive(id)／archiveList(q, year, n)／purge(id, 短案名) → 封存區與徹底刪除
 //   await api.scanStatus() → 三籃掃描狀態；await api.scanRequest(lane) → 該籃的新狀態或 null
 //   await api.events(id, n) → 這張卡的紀錄 [{at, actor, action, detail}]，新到舊（opp_events，sql/29）
+//   await api.prefGet()／prefSet({skin}) → {skin} 或 null；後端沒有這兩支時丟 AdapterError('missing')（v90，需求清單 R1）
 //   api.subscribe(onPing, onState)→ 取消函式；onPing() 代表「有變動，請重抓」，onState(bool) 代表即時連線狀態
 //   網頁端沒有任何寫入進度的呼叫：進度只由企劃流程用 planner 金鑰回寫。
 // =====================================================================
@@ -39,7 +40,10 @@ export const CONFIG = {
          events: 'opp_events',
          requestBid: 'opp_request_bid', markPaid: 'opp_mark_paid',   // 領標（sql/29、31）
          stepMark: 'opp_step_mark', track: 'opp_track', presence: 'opp_admin_presence',
-         bulletin: 'opp_bulletin_get' },   // v81：追蹤公告的每日報告（sql/37，C 做）   // 步驟按鈕（32）、點擊紀錄（34）、誰接進來了（35）   // 卡片紀錄（sql/29，D 做；viewer 以上可讀）   // 追蹤事項（sql/27，C 做）   // 封存區與徹底刪除（sql/25，C 做）
+         bulletin: 'opp_bulletin_get',
+         // v90（v3 外觀）：每人自選外觀存在該人金鑰的設定。這兩支 RPC 雲端還沒有（見備料 02_資料庫與RPC需求清單.md），
+         // 沒有時前端只記在這支手機，畫面上照實說「還沒跟著金鑰」。
+         prefGet: 'opp_pref_get', prefSet: 'opp_pref_set' },   // v81：追蹤公告的每日報告（sql/37，C 做）   // 步驟按鈕（32）、點擊紀錄（34）、誰接進來了（35）   // 卡片紀錄（sql/29，D 做；viewer 以上可讀）   // 追蹤事項（sql/27，C 做）   // 封存區與徹底刪除（sql/25，C 做）
   MSG_LIMIT: 50,
 };
 
@@ -84,7 +88,7 @@ export async function createAdapter() {
   const configured = CONFIG.SUPABASE_URL.startsWith('http') && !CONFIG.SUPABASE_URL.includes('YOUR-PROJECT-REF') && !CONFIG.SUPABASE_ANON_KEY.startsWith('YOUR-');
   if (!configured) console.info('[好咖皮條客] adapter.js 的 SUPABASE_URL / SUPABASE_ANON_KEY 還是待填佔位，目前顯示示範資料');
   if (hasKey() && !forceMock && configured) return liveAdapter();
-  const { mockAdapter } = await import('./mock.js?v81');   // ?v 跟 sw.js 的 CACHE 一起換
+  const { mockAdapter } = await import('./mock.js?v90');   // ?v 跟 sw.js 的 CACHE 一起換
   return mockAdapter(forceMock ? mockFlag : '');
 }
 
@@ -253,6 +257,13 @@ export const normalizeEvents = d => (Array.isArray(d) ? d : (d && Array.isArray(
   .map(e => ({ at: ts(e.at), itemId: str(e.item_id), actor: rkName(nick(str(e.actor))), action: str(e.action), detail: e.detail && typeof e.detail === 'object' ? e.detail : {} }));
 export const normalizeFollowups = d => (Array.isArray(d) ? d : (d && Array.isArray(d.items) ? d.items : [])).filter(x => x && typeof x === 'object' && x.id != null).map(normalizeFollowup);
 
+// ---------- v90：每人外觀設定（只收白名單欄位） ----------
+// skin：1 暮光色塊（預設）、2 片場夜拍、3 黑白場記板。之後要加欄位（例如字級）在這裡加白名單，後端 opp_pref_set 也要同步。
+export const SKINS = { 1: '暮光色塊', 2: '片場夜拍', 3: '黑白場記板' };
+export const cleanPrefs = p => { const o = {}; const s = Number(p && p.skin); if (SKINS[s]) o.skin = s; return o; };
+export function normalizePrefs(d) { if (Array.isArray(d)) d = d[0]; if (!d || typeof d !== 'object') return null; const o = cleanPrefs(d); return Object.keys(o).length ? o : null; }
+const prefMissing = e => (e instanceof AdapterError && (e.status === 404 || /PGRST202|Could not find the function/i.test(e.message || ''))) ? new AdapterError('missing', e.message, e.status) : e;
+
 // ---------- 真後端（Supabase REST + Realtime） ----------
 function liveAdapter() {
   const base = CONFIG.SUPABASE_URL.replace(/\/+$/, '');
@@ -287,8 +298,12 @@ function liveAdapter() {
     mode: 'live',
     async whoami() {
       const d = await rpc(R.whoami, {});
-      return { role: str(d && d.role), kind: str(d && d.kind), caps: (d && d.caps) || {}, aliases: Array.isArray(d && d.aliases) ? d.aliases.map(str).filter(Boolean) : [] };   // aliases（sql/32）：第一個是金鑰名
+      return { role: str(d && d.role), kind: str(d && d.kind), caps: (d && d.caps) || {}, aliases: Array.isArray(d && d.aliases) ? d.aliases.map(str).filter(Boolean) : [],   // aliases（sql/32）：第一個是金鑰名
+        prefs: normalizePrefs(d && d.prefs) };   // v90：whoami 之後若帶 prefs 就直接用（需求清單 R2），現在雲端不會帶，是 null
     },
+    // v90：外觀設定。後端沒有這兩支（PGRST202／404）就丟 AdapterError('missing')，app 改成只記在這支手機
+    async prefGet() { try { return normalizePrefs(await rpc(R.prefGet, {})); } catch (e) { throw prefMissing(e); } },
+    async prefSet(p) { try { return normalizePrefs(await rpc(R.prefSet, { p_prefs: cleanPrefs(p) })); } catch (e) { throw prefMissing(e); } },
     async list() {
       const d = await rpc(R.list, { p_gone_hours: CONFIG.GONE_HOURS });
       if (!d || !Array.isArray(d.items)) throw new AdapterError('server', '回傳格式不對');

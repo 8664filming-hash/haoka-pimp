@@ -1,3 +1,19 @@
+# 好咖皮條客前端 v90（v3 新設計：首頁五個房間 × 暮光色塊，外觀每人自選）
+
+2026-11-22 備料版，**還沒上線**。從 v81 發佈快照改出來：資料、權限、RPC 照舊，換畫面與互動。
+對照表、資料庫需求、SW 方案、上線計畫在上一層 `1122_皮條客_v3備料/01～04`。
+
+v90 與下面 v81 說明不同的地方：
+- `js/app.js` 整支照 v3 設計稿重寫畫面層；邏輯（樂觀更新、輪詢、Realtime、快照、換新版）照 v81。
+- `css/app.css` 來自設計稿樣式＋檔尾補充。`icons/rouka.jpg`（肉咖頭像）、`icons/logo.png`（好咖標）從設計稿抽出。
+- `js/adapter.js` 多了 `prefGet`／`prefSet`（opp_pref_get／opp_pref_set，雲端還沒有，沒有時自動只記在手機）。
+- `js/mock.js` 多了 `?mock=bosen`（一般同事）、`?mock=noprefs`（外觀資料庫未開）。
+- `sw.js` **要改**了：快取名帶版號 `opp-co-shell-v90`，只刪自己前綴的舊快取；發版改 `VERSION` 一行。
+- manifest 與圖示網址刻意留在 `?v81`／`?v71`，發版時**不要**用 sed 全換。
+
+---
+（以下是 v81 原說明，保留參考）
+
 # 好咖皮條客前端
 
 靜態網頁，沒有建置步驟。`index.html` 加 `css/app.css` 加 `js/*.js`（ES modules）。版面規格見交接包 `DESIGN.md`，後端契約見 `面板運作說明.md` 第 4 節與 `sql/02_rpcs.sql`、`sql/10_progress.sql`、`sql/20_multiuser.sql`。
